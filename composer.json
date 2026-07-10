@@ -1,0 +1,35 @@
+{
+    "name": "carmelosantana/kanboard-ai-connector",
+    "description": "Kanboard plugin — universal multi-provider AI backend (php-agents) with named provider profiles and a shared PHP API",
+    "type": "kanboard-plugin",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Carmelo Santana",
+            "email": "carmelo@vctrs.io"
+        }
+    ],
+    "require": {
+        "php": ">=8.4",
+        "carmelosantana/php-agents": "dev-main"
+    },
+    "replace": {
+        "psr/log": "*",
+        "psr/container": "*"
+    },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "/home/carmelo/Projects/CoquiBot/Core/php-agents",
+            "options": {
+                "symlink": false
+            }
+        }
+    ],
+    "config": {
+        "optimize-autoloader": true,
+        "vendor-dir": "vendor"
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
