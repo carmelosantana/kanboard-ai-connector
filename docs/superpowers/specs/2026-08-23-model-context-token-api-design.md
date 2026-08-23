@@ -177,17 +177,132 @@ Design:
 
 ## 8. Deep-research: curated context-window data
 
-> **NOTE:** This section is populated by the `/deep-research` pass. Values below
-> carry a source URL; each is verified against a primary source (official model
-> card, provider API docs, or the Ollama library page) where possible, and
-> flagged `UNVERIFIED (secondary)` otherwise. `ModelContextTable::LAST_VERIFIED`
-> records the compilation date.
+> **`ModelContextTable::LAST_VERIFIED = '2026-08-23'`.** Each value is verified
+> against a primary source (official model card, provider API docs, or the Ollama
+> library page) except where flagged `UNVERIFIED (secondary)`.
+>
+> **Value convention:** the table stores each model's **total native context
+> window** — the same quantity `ModelDefinition::fromDiscovery` reads live from
+> Ollama's `model_info.<arch>.context_length` — so live and table values are
+> semantically identical. Where a provider caps *input* below the advertised
+> total (only OpenAI gpt-5, 272K input / 400K total), the total is stored;
+> `getInputBudget()` reserves output headroom on top, and cover-note-sized prompts
+> never approach either cap, so the split is immaterial in practice (documented
+> caveat below).
+>
+> **Conservative-floor rule (Ollama families):** where a family spans multiple
+> native windows by size/variant (qwen3, gemma3, phi3, deepseek), the table stores
+> the **smaller** value. Under-reporting context only makes budgeting safer (a
+> prompt that fits the floor fits the larger real window); over-reporting risks
+> overflow. Live discovery (primary for Ollama) supplies the exact per-model value
+> anyway; the table is the offline fallback.
+>
+> **Beta tiers excluded:** values are the standard tier available without special
+> API headers. Claude Sonnet 4 / 4.5's 1M window (requires `context-1m-*` beta
+> header) is **not** used — 200K standard is stored.
 
-_(Tables + citations inserted here from the research pass before the spec is
-finalized. Covers: Ollama library (qwen3/2.5, llama3.1/3.2/3.3, gemma2/3,
-mistral/mixtral, phi, deepseek, codellama, embeds), Anthropic Claude, OpenAI
-gpt-4o/4.1/gpt-5/o-series, Google Gemini 1.5/2.0/2.5, Mistral API, xAI Grok, plus
-normalization notes and per-provider default fallbacks.)_
+### 8.1 Anthropic (`provider: anthropic`)
+
+| model id / family | context window | source |
+|---|---|---|
+| `claude-3-opus*` | 200000 | platform.claude.com/docs/en/about-claude/model-deprecations |
+| `claude-3-5-sonnet*`, `claude-3-5-haiku*` | 200000 | ” |
+| `claude-sonnet-4*`, `claude-opus-4*`, `claude-opus-4-1*` | 200000 (Sonnet 4 had a 1M **beta** — excluded) | claude.com/blog/1m-context |
+| `claude-sonnet-4-5*`, `claude-opus-4-5*`, `claude-haiku-4-5*` | 200000 | platform.claude.com/docs/en/about-claude/models/overview |
+| family `claude-sonnet-4-6/-4-7/-4-8`, `claude-opus-4-6/-4-7/-4-8` | 1000000 (GA default from 4.6, 2026-03-13) | platform.claude.com/docs/en/build-with-claude/context-windows |
+| **provider default** | **200000** | — |
+
+### 8.2 OpenAI (`provider: openai` **and** `openai_responses` — shared partition)
+
+| model id / family | context window | source |
+|---|---|---|
+| `gpt-4o`, `gpt-4o-mini` | 128000 | developers.openai.com/api/docs/models/gpt-4o |
+| `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano` | 1047576 | developers.openai.com/api/docs/models/gpt-4.1 |
+| `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-5-pro` | 400000 (272000 max **input**; see caveat) | developers.openai.com/api/docs/models/gpt-5 |
+| `gpt-5-chat-latest` | 128000 | developers.openai.com/api/docs/models/gpt-5-chat-latest |
+| `o1`, `o1-pro`, `o3`, `o3-mini`, `o3-pro`, `o4-mini` | 200000 | developers.openai.com/api/docs/models/o3 |
+| `o1-mini` | 128000 | developers.openai.com/api/docs/models/o1-mini |
+| family `gpt-4o`→128000, `gpt-4.1`→1047576, `gpt-5`→400000, `o1`→200000, `o3`→200000, `o4`→200000 | | |
+| **provider default** | **128000** | — |
+
+Caveat: gpt-5 family publishes 400000 **total** context but 272000 **max input**
+(remainder reserved for reasoning/output). Stored value is 400000 (total);
+practical prompts stay far below 272000.
+
+### 8.3 Google Gemini (`provider: gemini`)
+
+| model id / family | context window | source |
+|---|---|---|
+| `gemini-1.5-pro` | 2097152 (2M tier; 1M base) | developers.googleblog.com (Gemini API 2M) |
+| `gemini-1.5-flash` | 1048576 | cloud.google.com/vertex-ai/.../gemini/1-5-flash |
+| `gemini-2.0-flash`, `gemini-2.0-flash-lite` | 1048576 | ai.google.dev/gemini-api/docs/models/gemini-2.0-flash |
+| `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite` | 1048576 | ai.google.dev/gemini-api/docs/models/gemini-2.5-pro |
+| family `gemini-1.5-pro`→2097152, `gemini-1.5`→1048576, `gemini-2.0`→1048576, `gemini-2.5`→1048576 | | |
+| **provider default** | **1048576** | — |
+
+(Values are documented **input** token limits; the exact integers are 1024×1024 =
+1048576 and 2×1024×1024 = 2097152, not rounded millions.)
+
+### 8.4 Mistral API (`provider: mistral`)
+
+| model id / family | context window | source |
+|---|---|---|
+| `mistral-large-*` (2 / 2.1) | 128000 | docs.mistral.ai/models/model-cards/mistral-large-2-1-24-11 |
+| `mistral-small-2506` (3.2) | 128000 | docs.mistral.ai/.../mistral-small-3-2-25-06 |
+| `mistral-small-2409` (orig) | 32000 | UNVERIFIED (secondary) — old card removed |
+| `codestral-*` (25.08 / 25.01) | 128000 | docs.mistral.ai/.../codestral-25-08 |
+| `ministral-8b-*`, `ministral-3b-*` | 128000 | docs.mistral.ai/.../ministral-8b-24-1 |
+| `pixtral-large-*`, `pixtral-12b-*` | 128000 | docs.mistral.ai/.../pixtral-large-24-11 |
+| `mistral-medium-2508` (3.1) | 128000 | docs.mistral.ai/.../mistral-medium-3-1-25-08 |
+| `mistral-medium-2604` (3.5) | 256000 | docs.mistral.ai/.../mistral-medium-3-5-26-04 |
+| family `mistral-large`→128000, `mistral-small`→128000, `mistral-medium`→256000, `codestral`→128000, `ministral`→128000, `pixtral`→128000 | | |
+| **provider default** | **128000** | — |
+
+Note: `*-latest` aliases have advanced (as of Aug 2026 `mistral-small-latest`→Small 4 =
+256000, `mistral-medium-latest`→Medium 3.5 = 256000, `mistral-large-latest`→Large 3).
+The conservative 128000 default is safe for any unknown Mistral id.
+
+### 8.5 xAI Grok (`provider: grok`)
+
+| model id / family | context window | source |
+|---|---|---|
+| `grok-3`, `grok-3-mini`, `grok-3-fast` | 131072 | UNVERIFIED (secondary, OpenRouter; docs page retired the models) |
+| `grok-4`, `grok-4-latest`, `grok-4-0709` | 256000 | x.ai/news/grok-4 |
+| `grok-code-fast-1` (`grok-build-0.1`) | 256000 | docs.x.ai/developers/models |
+| `grok-4-fast-reasoning`, `grok-4-fast-non-reasoning` | 2000000 | x.ai/news/grok-4-fast |
+| `grok-2*`, `grok-beta` | 131072 | UNVERIFIED (secondary; retired) |
+| family `grok-4-fast`→2000000, `grok-4`→256000, `grok-code`→256000, `grok-3`→131072, `grok-2`→131072 | | |
+| **provider default** | **131072** | — |
+
+(Grok 3 was announced at "1M" but the shipped API served 131072 — the real value.)
+
+### 8.6 Ollama library (`provider: ollama`) — offline fallback only
+
+Live `/api/show` is primary for Ollama (§7); this table is used only when the
+daemon is unreachable. Values are native `context_length`; families use the
+conservative floor.
+
+| ollama family | context window | source |
+|---|---|---|
+| `qwen3` | 40960 (2507 variants 262144 — floor stored) | ollama.com/library/qwen3 |
+| `qwen2.5`, `qwen2.5-coder` | 32768 | ollama.com/library/qwen2.5 |
+| `llama3.1`, `llama3.2`, `llama3.3` | 131072 | ollama.com/library/llama3.1 |
+| `gemma2` | 8192 | ollama.com/library/gemma2 |
+| `gemma3` | 32768 (4b+ 131072 — floor) | ollama.com/library/gemma3 |
+| `mistral` | 32768 | ollama.com/library/mistral |
+| `mixtral` | 32768 (8x22b 65536 — floor) | ollama.com/library/mixtral |
+| `phi3` | 4096 (`-128k` 131072 — floor) | ollama.com/library/phi3 |
+| `phi4` | 16384 | huggingface.co/microsoft/phi-4 |
+| `deepseek-r1` | 131072 (671b 163840 — floor) | ollama.com/library/deepseek-r1 |
+| `deepseek-v3` | 131072 (native 163840 — floor) | ollama.com/library/deepseek-v3 |
+| `codellama` | 16384 | ollama.com/library/codellama |
+| `nomic-embed-text` | 2048 | ollama.com/library/nomic-embed-text |
+| **provider default** | **8192** | — |
+
+### 8.7 Global default
+
+`8192` — returned only when the provider is unknown/unsupported or no
+provider-default matches. Conservative and safe for the smallest local models.
 
 ## 9. Test seams (unit tests need no network)
 
