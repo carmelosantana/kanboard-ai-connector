@@ -151,6 +151,43 @@ $result = $registry->structured(
 // $result is a decoded PHP array — use it directly.
 ```
 
+## ModelCatalog API (v1.1.0+)
+
+Discover a model's context window and estimate token counts. Construct it like
+`ProviderRegistry`:
+
+```php
+use Kanboard\Plugin\AiConnector\Model\ModelCatalog;
+
+$catalog = new ModelCatalog($this->container);
+
+$max    = $catalog->getContextWindow($profileId);          // int, e.g. 131072
+$tokens = $catalog->countTokens($text, $profileId);        // heuristic int estimate
+$budget = $catalog->getInputBudget($profileId);            // fits-in-prompt int (reserves 1024 output)
+$budget = $catalog->getInputBudget($profileId, 2048);      // custom output reserve
+```
+
+- `$profileId` is optional everywhere; `null` uses the default profile.
+- **All three methods are non-throwing.** An unknown/missing profile, an
+  unreachable Ollama, or an unknown model id falls back to a conservative value.
+- **Context resolution:** for Ollama profiles a live `/api/show` lookup runs and
+  is cached for 24h; all providers fall back to a curated table
+  (`ModelContextTable`, `LAST_VERIFIED` dated) and finally a 8192 default.
+- **Token counting** is heuristic (no network, no tiktoken dependency): ~4
+  chars/token (3.5 for Anthropic).
+
+Typical "fit the prompt" loop:
+
+```php
+$budget = $catalog->getInputBudget($profileId);
+while ($catalog->countTokens($draft, $profileId) > $budget) {
+    $draft = shrink($draft);
+}
+```
+
+Consumers should treat AiConnector as an optional (`recommends`) dependency and
+guard usage with `class_exists(ModelCatalog::class)`.
+
 ## php-agents load-order rule
 
 AiConnector is the **only** plugin in this suite that bundles `php-agents`

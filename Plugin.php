@@ -53,7 +53,7 @@ class Plugin extends Base
 
     public function getPluginDescription(): string
     {
-        return t('Universal multi-provider AI backend (php-agents) with provider profiles and a shared PHP API.');
+        return t('Universal multi-provider AI backend (php-agents) with provider profiles, model context-window discovery, and a shared PHP API.');
     }
 
     public function getPluginAuthor(): string
@@ -63,7 +63,7 @@ class Plugin extends Base
 
     public function getPluginVersion(): string
     {
-        return '1.0.0';
+        return '1.1.0';
     }
 
     public function getPluginHomepage(): string

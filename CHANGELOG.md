@@ -2,6 +2,16 @@
 
 All notable changes to AiConnector will be documented here.
 
+## [1.1.0] — 2026-08-23
+
+### Added
+- `ModelCatalog` public API: `getContextWindow()`, `countTokens()`,
+  `getInputBudget()` for model context-window discovery and token estimation.
+- Live Ollama context discovery via `/api/show` with a 24h cache; curated
+  fallback table (`ModelContextTable`) covering Ollama, Anthropic, OpenAI,
+  Gemini, Mistral, and xAI Grok, plus a conservative 8192 default.
+- `setContextResolverForTesting()` seam for network-free unit tests.
+
 ## [1.0.0] — 2026-07-10
 
 ### Added
