@@ -277,7 +277,7 @@ Caveats:
 | `pixtral-large-*`, `pixtral-12b-*` | 128000 | docs.mistral.ai/.../pixtral-large-24-11 |
 | `mistral-medium-2508` (3.1) | 128000 | docs.mistral.ai/.../mistral-medium-3-1-25-08 |
 | `mistral-medium-2604` (3.5) | 256000 | docs.mistral.ai/.../mistral-medium-3-5-26-04 |
-| family `mistral-large`→128000, `mistral-small`→128000, `mistral-medium`→256000, `codestral`→128000, `ministral`→128000, `pixtral`→128000 | | |
+| family `mistral-large`→128000, `mistral-small`→128000, `mistral-medium`→128000 (conservative floor — Medium 3.5/`-2604` is 256K, but unknown `mistral-medium-*` ids resolve to the 128K floor to under-budget safely; the exact `mistral-medium-2604` id still returns 256000), `codestral`→128000, `ministral`→128000, `pixtral`→128000 | | |
 | **provider default** | **128000** | — |
 
 Note: `*-latest` aliases have advanced (as of Aug 2026 `mistral-small-latest`→Small 4 =

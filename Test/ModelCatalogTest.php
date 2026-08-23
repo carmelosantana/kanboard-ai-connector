@@ -65,6 +65,12 @@ class ModelCatalogTest extends Base
         $this->assertSame(10, $this->catalog()->countTokens(str_repeat('a', 40)));
     }
 
+    public function testCountTokensEmptyStringReturnsZeroWithoutError(): void
+    {
+        // non-throwing contract: empty text -> 0 (matches heuristic ceil(0/4)=0)
+        $this->assertSame(0, $this->catalog()->countTokens(''));
+    }
+
     // ── getContextWindow: table + default paths ─────────────────────────────────
 
     public function testContextWindowFromTableForCloudProvider(): void

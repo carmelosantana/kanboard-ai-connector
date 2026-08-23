@@ -45,6 +45,14 @@ class ModelContextTableTest extends Base
         $this->assertSame(40960, ModelContextTable::resolve('ollama', 'qwen3'));
     }
 
+    public function testMistralMediumFamilyFloorVsExactId(): void
+    {
+        // unknown mistral-medium-* -> conservative family floor 128000
+        $this->assertSame(128000, ModelContextTable::resolve('mistral', 'mistral-medium-2999'));
+        // exact id preserved -> 256000
+        $this->assertSame(256000, ModelContextTable::resolve('mistral', 'mistral-medium-2604'));
+    }
+
     public function testProviderDefaultWhenUnknownId(): void
     {
         $this->assertSame(200000, ModelContextTable::resolve('anthropic', 'totally-unknown'));

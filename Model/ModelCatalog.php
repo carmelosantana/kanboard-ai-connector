@@ -81,7 +81,7 @@ class ModelCatalog extends Base
         }
 
         if ($provider === ProviderRegistry::PROVIDER_OLLAMA) {
-            $live = $this->resolveLive($profile);
+            $live = $this->resolveLive($profile, $model);
             if ($live !== null && $live > 0) {
                 $this->writeCache($cacheKey, $live, 'live');
                 return $this->memo[$memoKey] = $live;
@@ -100,8 +100,13 @@ class ModelCatalog extends Base
     public function countTokens(string $text, ?string $profileId = null): int
     {
         $provider = $this->providerOf($profileId);
-        $counter  = TokenCounterFactory::forModel($this->counterKey($provider) . '/model');
-        return $counter->count($text);
+        try {
+            $counter = TokenCounterFactory::forModel($this->counterKey($provider) . '/model');
+            return $counter->count($text);
+        } catch (\Throwable $e) {
+            // Self-enforce the non-throwing contract regardless of the vendored counter.
+            return max(0, (int) ceil(mb_strlen($text) / 4));
+        }
     }
 
     /**
@@ -119,12 +124,12 @@ class ModelCatalog extends Base
     // ── live discovery (seam; production HTTP added in Task 3) ───────────────────
 
     /** Resolve context live: injected stub if set, else the production path. */
-    protected function resolveLive(array $profile): ?int
+    protected function resolveLive(array $profile, string $model): ?int
     {
         if ($this->contextResolver !== null) {
             return ($this->contextResolver)($profile);
         }
-        return $this->ollamaShowContext($profile);
+        return $this->ollamaShowContext($profile, $model);
     }
 
     /**
@@ -133,7 +138,7 @@ class ModelCatalog extends Base
      * normalization. Any failure (unreachable, timeout, missing field) -> null,
      * so resolution falls through to the curated table. Never throws.
      */
-    protected function ollamaShowContext(array $profile): ?int
+    protected function ollamaShowContext(array $profile, string $model): ?int
     {
         try {
             $base = (string) ($profile['base_url'] ?? '');
@@ -145,7 +150,7 @@ class ModelCatalog extends Base
 
             $client   = \Symfony\Component\HttpClient\HttpClient::create();
             $response = $client->request('POST', $base . '/api/show', [
-                'json'    => ['name' => (string) ($profile['model'] ?? '')],
+                'json'    => ['name' => $model],
                 'timeout' => 5,
             ]);
             $data = $response->toArray(false);
@@ -155,7 +160,7 @@ class ModelCatalog extends Base
                 return null;
             }
             $def = ModelDefinition::fromDiscovery('ollama', [
-                'id'            => (string) ($profile['model'] ?? 'ollama'),
+                'id'            => $model !== '' ? $model : 'ollama',
                 'contextWindow' => $ctx,
             ]);
             return $def?->contextWindow;
@@ -248,6 +253,7 @@ class ModelCatalog extends Base
                 'verified_at'    => time(),
             ];
             $this->configModel->save([self::CACHE_KEY => json_encode($map)]);
+            // Flush so the just-written configModel cache key is re-readable (Kanboard has no targeted invalidation).
             $this->container['memoryCache']->flush();
         } catch (\Throwable $e) {
             // Persistence is best-effort; the in-request memo still applies.
