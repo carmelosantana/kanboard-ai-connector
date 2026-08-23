@@ -135,6 +135,10 @@ Concrete ids are reduced before family matching:
 - provider-scoped: normalization + lookup are done within the profile's provider
   where the table is provider-partitioned, so an OpenAI `mistral-*` alias can't
   collide with the Ollama `mistral` family.
+- **most-specific (longest-prefix) family match wins.** `gpt-5.6-sol` must match
+  the `gpt-5.6` family (1050000), not `gpt-5` (400000); `claude-opus-5` must match
+  `claude-opus-5` before a broader `claude` rule. Family keys are tested
+  longest-first so a shorter prefix never shadows a more specific one.
 
 ## 6. Caching
 
@@ -210,7 +214,17 @@ Design:
 | `claude-sonnet-4*`, `claude-opus-4*`, `claude-opus-4-1*` | 200000 (Sonnet 4 had a 1M **beta** — excluded) | claude.com/blog/1m-context |
 | `claude-sonnet-4-5*`, `claude-opus-4-5*`, `claude-haiku-4-5*` | 200000 | platform.claude.com/docs/en/about-claude/models/overview |
 | family `claude-sonnet-4-6/-4-7/-4-8`, `claude-opus-4-6/-4-7/-4-8` | 1000000 (GA default from 4.6, 2026-03-13) | platform.claude.com/docs/en/build-with-claude/context-windows |
+| `claude-opus-5`, `claude-sonnet-5`, `claude-fable-5`, `claude-mythos-5`, `claude-mythos-preview` | 1000000 (1M **default**, no beta header) | platform.claude.com/docs/en/about-claude/models/overview |
+| family `claude-*-5` (any Claude 5 member) | 1000000 | platform.claude.com/docs/en/build-with-claude/context-windows |
 | **provider default** | **200000** | — |
+
+Claude 5 notes: **no `claude-haiku-5` exists** — the Haiku line tops out at
+`claude-haiku-4-5` (200K). Claude 5 ids are **dateless-id-as-snapshot** (the id
+*is* the pinned version; no `-YYYYMMDD`, `-0`, or `-latest` forms are documented).
+Normalization strips any trailing `-latest`, `-0`, or `-<8-digit date>` defensively
+to reach the family key `claude-{opus|sonnet|fable|mythos}-5`. Provider default
+stays a conservative 200000; every *known* Claude 5 id resolves to 1M by exact/family
+match, and an unknown `claude-*-5` matches the family rule → 1M.
 
 ### 8.2 OpenAI (`provider: openai` **and** `openai_responses` — shared partition)
 
@@ -222,12 +236,20 @@ Design:
 | `gpt-5-chat-latest` | 128000 | developers.openai.com/api/docs/models/gpt-5-chat-latest |
 | `o1`, `o1-pro`, `o3`, `o3-mini`, `o3-pro`, `o4-mini` | 200000 | developers.openai.com/api/docs/models/o3 |
 | `o1-mini` | 128000 | developers.openai.com/api/docs/models/o1-mini |
-| family `gpt-4o`→128000, `gpt-4.1`→1047576, `gpt-5`→400000, `o1`→200000, `o3`→200000, `o4`→200000 | | |
+| `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, alias `gpt-5.6` | 1050000 (922000 max **input**) | developers.openai.com/api/docs/models/gpt-5.6-sol |
+| `gpt-5.6-cyber` (access-gated) | 400000 (272000 max **input**) | developers.openai.com/api/docs/models/gpt-5.6-cyber |
+| family `gpt-4o`→128000, `gpt-4.1`→1047576, `gpt-5`→400000, `gpt-5.6`→1050000, `o1`→200000, `o3`→200000, `o4`→200000 | | |
 | **provider default** | **128000** | — |
 
-Caveat: gpt-5 family publishes 400000 **total** context but 272000 **max input**
-(remainder reserved for reasoning/output). Stored value is 400000 (total);
-practical prompts stay far below 272000.
+Caveats:
+- gpt-5 family publishes 400000 **total** context but 272000 **max input**
+  (remainder reserved for reasoning/output). Stored value is 400000 (total).
+- **gpt-5.6 family** ("Sol"/"Terra"/"Luna" tiers; bare `gpt-5.6` → `gpt-5.6-sol`):
+  1050000 total / 922000 max input / 128000 output. Stored value is 1050000
+  (total). `gpt-5.6-cyber` is the exception (400000 total, gated) and must **not**
+  inherit the 1050000 family default — hence the explicit exact-id entry.
+- Practical cover-note prompts stay far below every input cap, so the total-vs-input
+  split is immaterial to `getInputBudget()` sizing in this use case.
 
 ### 8.3 Google Gemini (`provider: gemini`)
 
