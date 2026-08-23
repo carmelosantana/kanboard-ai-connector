@@ -173,4 +173,44 @@ class ModelCatalogTest extends Base
         // reserve 4096 would go negative; clamped to half (1024) -> 1024
         $this->assertSame(1024, $this->catalog()->getInputBudget(null, 4096));
     }
+
+    // ── live parse (Task 3) ─────────────────────────────────────────────────────
+
+    public function testExtractOllamaContextReadsArchPrefixedKey(): void
+    {
+        $c = new class ($this->container) extends ModelCatalog {
+            public function pub(array $p): ?int { return $this->extractOllamaContext($p); }
+        };
+        $payload = [
+            'model_info' => [
+                'general.architecture' => 'llama',
+                'llama.context_length' => 131072,
+            ],
+        ];
+        $this->assertSame(131072, $c->pub($payload));
+    }
+
+    public function testExtractOllamaContextHandlesNumericString(): void
+    {
+        $c = new class ($this->container) extends ModelCatalog {
+            public function pub(array $p): ?int { return $this->extractOllamaContext($p); }
+        };
+        $payload = [
+            'model_info' => [
+                'general.architecture' => 'qwen3',
+                'qwen3.context_length' => '40960',
+            ],
+        ];
+        $this->assertSame(40960, $c->pub($payload));
+    }
+
+    public function testExtractOllamaContextReturnsNullWhenMissing(): void
+    {
+        $c = new class ($this->container) extends ModelCatalog {
+            public function pub(array $p): ?int { return $this->extractOllamaContext($p); }
+        };
+        $this->assertNull($c->pub([]));
+        $this->assertNull($c->pub(['model_info' => ['general.architecture' => 'llama']]));
+        $this->assertNull($c->pub(['model_info' => ['general.architecture' => 'llama', 'llama.context_length' => 'NaN']]));
+    }
 }

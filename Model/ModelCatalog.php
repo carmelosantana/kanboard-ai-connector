@@ -5,6 +5,7 @@ namespace Kanboard\Plugin\AiConnector\Model;
 use Kanboard\Core\Base;
 
 use CarmeloSantana\PHPAgents\Context\TokenCounterFactory;
+use CarmeloSantana\PHPAgents\Config\ModelDefinition;
 
 /**
  * ModelCatalog — public PHP API for model context-window discovery + token
@@ -126,9 +127,64 @@ class ModelCatalog extends Base
         return $this->ollamaShowContext($profile);
     }
 
-    /** Production live Ollama discovery. Wired in Task 3; null until then. */
+    /**
+     * Production live Ollama discovery: one POST {baseUrl}/api/show, parsed to a
+     * native context length. Reuses php-agents ModelDefinition::fromDiscovery for
+     * normalization. Any failure (unreachable, timeout, missing field) -> null,
+     * so resolution falls through to the curated table. Never throws.
+     */
     protected function ollamaShowContext(array $profile): ?int
     {
+        try {
+            $base = (string) ($profile['base_url'] ?? '');
+            if ($base === '') {
+                $host = getenv('OLLAMA_HOST');
+                $base = ($host !== false && $host !== '') ? $host : 'http://localhost:11434';
+            }
+            $base = preg_replace('#/v1/?$#', '', rtrim($base, '/'));
+
+            $client   = \Symfony\Component\HttpClient\HttpClient::create();
+            $response = $client->request('POST', $base . '/api/show', [
+                'json'    => ['name' => (string) ($profile['model'] ?? '')],
+                'timeout' => 5,
+            ]);
+            $data = $response->toArray(false);
+
+            $ctx = $this->extractOllamaContext($data);
+            if ($ctx === null || $ctx <= 0) {
+                return null;
+            }
+            $def = ModelDefinition::fromDiscovery('ollama', [
+                'id'            => (string) ($profile['model'] ?? 'ollama'),
+                'contextWindow' => $ctx,
+            ]);
+            return $def?->contextWindow;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    /**
+     * Extract the native context length from an Ollama /api/show payload:
+     * model_info["<general.architecture>.context_length"]. Null when absent or
+     * non-numeric. Mirrors OllamaProvider's own extraction.
+     *
+     * @param array<string, mixed> $showPayload
+     */
+    protected function extractOllamaContext(array $showPayload): ?int
+    {
+        $modelInfo = is_array($showPayload['model_info'] ?? null) ? $showPayload['model_info'] : [];
+        $arch      = $modelInfo['general.architecture'] ?? null;
+        if (! is_string($arch) || $arch === '') {
+            return null;
+        }
+        $value = $modelInfo[$arch . '.context_length'] ?? null;
+        if (is_int($value)) {
+            return $value;
+        }
+        if (is_string($value) && is_numeric($value)) {
+            return (int) $value;
+        }
         return null;
     }
 
