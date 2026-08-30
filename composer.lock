@@ -4,15 +4,21 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "a4b71f478ae53f1b08cabe1c4e710314",
+    "content-hash": "3a9657c2e0dea43ee5c0585d3d366afa",
     "packages": [
         {
             "name": "carmelosantana/php-agents",
-            "version": "dev-main",
+            "version": "v0.15.1",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/carmelosantana/php-agents.git",
+                "reference": "07c048a07dd62358e4a120599ed0382b2e5e2a68"
+            },
             "dist": {
-                "type": "path",
-                "url": "/home/carmelo/Projects/CoquiBot/Core/php-agents",
-                "reference": "84482353f37bc4bbc4de5cd5f90c7b80ad4d5c58"
+                "type": "zip",
+                "url": "https://api.github.com/repos/carmelosantana/php-agents/zipball/07c048a07dd62358e4a120599ed0382b2e5e2a68",
+                "reference": "07c048a07dd62358e4a120599ed0382b2e5e2a68",
+                "shasum": ""
             },
             "require": {
                 "php": "^8.4",
@@ -36,39 +42,7 @@
                     "CarmeloSantana\\PHPAgents\\": "src/"
                 }
             },
-            "autoload-dev": {
-                "psr-4": {
-                    "Tests\\": "tests/"
-                }
-            },
-            "scripts": {
-                "test": [
-                    "pest"
-                ],
-                "analyse": [
-                    "phpstan analyse --memory-limit=512M"
-                ],
-                "benchmark:llama-cpp-runtime": [
-                    "Composer\\Config::disableProcessTimeout",
-                    "php scripts/benchmark-llama-cpp-runtime.php"
-                ],
-                "benchmark:llama-cpp-cache": [
-                    "Composer\\Config::disableProcessTimeout",
-                    "php scripts/benchmark-llama-cpp-cache.php"
-                ],
-                "compare:llama-cpp-vs-ollama": [
-                    "Composer\\Config::disableProcessTimeout",
-                    "php scripts/compare-llama-cpp-vs-ollama.php"
-                ],
-                "setup:llama-cpp": [
-                    "Composer\\Config::disableProcessTimeout",
-                    "./scripts/setup-llama-cpp.sh"
-                ],
-                "test:llama-cpp-runtime": [
-                    "Composer\\Config::disableProcessTimeout",
-                    "./scripts/test-llama-cpp-runtime.sh"
-                ]
-            },
+            "notification-url": "https://packagist.org/downloads/",
             "license": [
                 "MIT"
             ],
@@ -85,10 +59,11 @@
                 "php-agents",
                 "tools"
             ],
-            "transport-options": {
-                "symlink": false,
-                "relative": false
-            }
+            "support": {
+                "issues": "https://github.com/carmelosantana/php-agents/issues",
+                "source": "https://github.com/carmelosantana/php-agents/tree/v0.15.1"
+            },
+            "time": "2026-08-30T21:32:09+00:00"
         },
         {
             "name": "symfony/deprecation-contracts",
@@ -431,9 +406,7 @@
     "packages-dev": [],
     "aliases": [],
     "minimum-stability": "dev",
-    "stability-flags": {
-        "carmelosantana/php-agents": 20
-    },
+    "stability-flags": {},
     "prefer-stable": true,
     "prefer-lowest": false,
     "platform": {

@@ -11,21 +11,12 @@
     ],
     "require": {
         "php": ">=8.4",
-        "carmelosantana/php-agents": "dev-main"
+        "carmelosantana/php-agents": "^0.15.1"
     },
     "replace": {
         "psr/log": "*",
         "psr/container": "*"
     },
-    "repositories": [
-        {
-            "type": "path",
-            "url": "/home/carmelo/Projects/CoquiBot/Core/php-agents",
-            "options": {
-                "symlink": false
-            }
-        }
-    ],
     "config": {
         "optimize-autoloader": true,
         "vendor-dir": "vendor"
