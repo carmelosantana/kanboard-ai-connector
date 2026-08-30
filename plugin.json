@@ -1,7 +1,7 @@
 {
     "name": "AiConnector",
     "description": "Universal multi-provider AI backend (php-agents) with provider profiles, model context-window discovery, and a shared PHP API.",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "author": "Carmelo Santana",
     "homepage": "https://github.com/carmelosantana/kanboard-ai-connector",
     "license": "MIT",

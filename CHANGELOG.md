@@ -2,6 +2,17 @@
 
 All notable changes to AiConnector will be documented here.
 
+## [1.1.1] — 2026-08-30
+
+### Fixed
+- Re-vendored `carmelosantana/php-agents` to pick up the `structured()`
+  `response_format.json_schema` wrapper fix (`{name, schema, strict}` per the
+  OpenAI / Ollama OpenAI-compat spec). Without the wrapper, servers ignored the
+  schema and returned free-form prose, so `ProviderRegistry::structured()`
+  normalized to an empty array — the root cause of downstream structured-output
+  failures (e.g. TimeInvoice's AI cover-note 502). Verified live against LAN
+  Ollama (non-thinking + thinking models) end-to-end.
+
 ## [1.1.0] — 2026-08-23
 
 ### Added
