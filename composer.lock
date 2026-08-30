@@ -12,7 +12,7 @@
             "dist": {
                 "type": "path",
                 "url": "/home/carmelo/Projects/CoquiBot/Core/php-agents",
-                "reference": "f3b43ed60a97bd7cf685353a860fe2020394e90a"
+                "reference": "84482353f37bc4bbc4de5cd5f90c7b80ad4d5c58"
             },
             "require": {
                 "php": "^8.4",

@@ -1,9 +1,9 @@
 <?php return array(
     'root' => array(
         'name' => 'carmelosantana/kanboard-ai-connector',
-        'pretty_version' => 'dev-master',
-        'version' => 'dev-master',
-        'reference' => '3acebde91dbca89436d4a7ca975e631a232b0955',
+        'pretty_version' => 'dev-main',
+        'version' => 'dev-main',
+        'reference' => 'd0dab95021007e63a7a741e5403ab273001bab61',
         'type' => 'kanboard-plugin',
         'install_path' => __DIR__ . '/../../',
         'aliases' => array(),
@@ -11,9 +11,9 @@
     ),
     'versions' => array(
         'carmelosantana/kanboard-ai-connector' => array(
-            'pretty_version' => 'dev-master',
-            'version' => 'dev-master',
-            'reference' => '3acebde91dbca89436d4a7ca975e631a232b0955',
+            'pretty_version' => 'dev-main',
+            'version' => 'dev-main',
+            'reference' => 'd0dab95021007e63a7a741e5403ab273001bab61',
             'type' => 'kanboard-plugin',
             'install_path' => __DIR__ . '/../../',
             'aliases' => array(),
@@ -22,7 +22,7 @@
         'carmelosantana/php-agents' => array(
             'pretty_version' => 'dev-main',
             'version' => 'dev-main',
-            'reference' => 'f3b43ed60a97bd7cf685353a860fe2020394e90a',
+            'reference' => '84482353f37bc4bbc4de5cd5f90c7b80ad4d5c58',
             'type' => 'library',
             'install_path' => __DIR__ . '/../carmelosantana/php-agents',
             'aliases' => array(),
