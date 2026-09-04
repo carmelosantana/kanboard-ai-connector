@@ -133,6 +133,7 @@ class ComposerStaticInita4b71f478ae53f1b08cabe1c4e710314
         'CarmeloSantana\\PHPAgents\\Provider\\Response' => __DIR__ . '/..' . '/carmelosantana/php-agents/src/Provider/Response.php',
         'CarmeloSantana\\PHPAgents\\Provider\\SchemaUtils' => __DIR__ . '/..' . '/carmelosantana/php-agents/src/Provider/SchemaUtils.php',
         'CarmeloSantana\\PHPAgents\\Provider\\SseStreamParser' => __DIR__ . '/..' . '/carmelosantana/php-agents/src/Provider/SseStreamParser.php',
+        'CarmeloSantana\\PHPAgents\\Provider\\StrictSchemaNormalizer' => __DIR__ . '/..' . '/carmelosantana/php-agents/src/Provider/StrictSchemaNormalizer.php',
         'CarmeloSantana\\PHPAgents\\Provider\\Usage' => __DIR__ . '/..' . '/carmelosantana/php-agents/src/Provider/Usage.php',
         'CarmeloSantana\\PHPAgents\\Provider\\XAIProvider' => __DIR__ . '/..' . '/carmelosantana/php-agents/src/Provider/XAIProvider.php',
         'CarmeloSantana\\PHPAgents\\Runtime\\LlamaCpp\\FfiLlamaCppNativeApi' => __DIR__ . '/..' . '/carmelosantana/php-agents/src/Runtime/LlamaCpp/FfiLlamaCppNativeApi.php',

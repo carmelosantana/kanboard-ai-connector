@@ -96,6 +96,7 @@ return array(
     'CarmeloSantana\\PHPAgents\\Provider\\Response' => $vendorDir . '/carmelosantana/php-agents/src/Provider/Response.php',
     'CarmeloSantana\\PHPAgents\\Provider\\SchemaUtils' => $vendorDir . '/carmelosantana/php-agents/src/Provider/SchemaUtils.php',
     'CarmeloSantana\\PHPAgents\\Provider\\SseStreamParser' => $vendorDir . '/carmelosantana/php-agents/src/Provider/SseStreamParser.php',
+    'CarmeloSantana\\PHPAgents\\Provider\\StrictSchemaNormalizer' => $vendorDir . '/carmelosantana/php-agents/src/Provider/StrictSchemaNormalizer.php',
     'CarmeloSantana\\PHPAgents\\Provider\\Usage' => $vendorDir . '/carmelosantana/php-agents/src/Provider/Usage.php',
     'CarmeloSantana\\PHPAgents\\Provider\\XAIProvider' => $vendorDir . '/carmelosantana/php-agents/src/Provider/XAIProvider.php',
     'CarmeloSantana\\PHPAgents\\Runtime\\LlamaCpp\\FfiLlamaCppNativeApi' => $vendorDir . '/carmelosantana/php-agents/src/Runtime/LlamaCpp/FfiLlamaCppNativeApi.php',

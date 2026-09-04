@@ -2,6 +2,20 @@
 
 All notable changes to AiConnector will be documented here.
 
+## [1.1.2] — 2026-09-04
+
+### Fixed
+- Re-vendored `carmelosantana/php-agents` (v0.15.2) to pick up the `structured()`
+  OpenAI strict-mode schema fix. v0.15.1 wrapped the schema with `strict: true`
+  but forwarded it verbatim; real OpenAI (ChatGPT) rejects any object schema
+  lacking `additionalProperties: false` (or not requiring every property) with an
+  HTTP 400 — so `ProviderRegistry::structured()` threw and consumers saw failures
+  like TimeReport's *"The summary could not be generated."* (v0.15.1 only ever ran
+  against LAN Ollama, which does not enforce strict mode). The library now
+  normalizes the schema for strict mode, and disables strict for schemas that
+  intentionally use open maps. Verified against php-agents' suite and live Coqui
+  (2692 tests, no regressions).
+
 ## [1.1.1] — 2026-08-30
 
 ### Fixed
