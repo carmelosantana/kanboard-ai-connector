@@ -35,6 +35,25 @@ class PluginTest extends Base
         );
     }
 
+    public function testVendoredPhpAgentsMatchesLockAndCarriesTheGeminiFix(): void
+    {
+        $root = dirname(__DIR__);
+        $find = static function (array $packages): ?string {
+            foreach ($packages as $package) {
+                if ($package['name'] === 'carmelosantana/php-agents') {
+                    return ltrim($package['version'], 'v');
+                }
+            }
+            return null;
+        };
+        $locked = $find(json_decode(file_get_contents($root . '/composer.lock'), true)['packages']);
+        $installed = $find(json_decode(file_get_contents($root . '/vendor/composer/installed.json'), true)['packages']);
+
+        $this->assertSame($locked, $installed, 'vendor/ must be re-vendored from composer.lock');
+        // 0.16.1 keeps a Gemini structured() properties map an object (Kanboard #4556).
+        $this->assertTrue(version_compare($installed, '0.16.1', '>='), "php-agents $installed predates 0.16.1");
+    }
+
     public function testProviderClassesResolve(): void
     {
         $autoload = dirname(__DIR__) . '/vendor/autoload.php';

@@ -11,7 +11,7 @@
     ],
     "require": {
         "php": ">=8.4",
-        "carmelosantana/php-agents": "^0.15.1"
+        "carmelosantana/php-agents": "^0.16.1"
     },
     "replace": {
         "psr/log": "*",

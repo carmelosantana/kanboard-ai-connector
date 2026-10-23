@@ -9,6 +9,7 @@ use CarmeloSantana\PHPAgents\Contract\MessageInterface;
 use CarmeloSantana\PHPAgents\Contract\ToolInterface;
 use CarmeloSantana\PHPAgents\Enum\ProviderFinishReason;
 use CarmeloSantana\PHPAgents\Enum\Role;
+use CarmeloSantana\PHPAgents\Schema\JsonSchemaRepair;
 use CarmeloSantana\PHPAgents\Tool\ToolCall;
 use Psr\Log\LoggerInterface;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
@@ -35,7 +36,22 @@ final class GeminiProvider extends AbstractProvider
         '$schema',
         '$ref',
         '$defs',
+        'definitions',
+        'patternProperties',
         'default',
+        // Gemini's Schema has no field for these (Kanboard subtask 6482). It has `anyOf`,
+        // which is kept and walked instead.
+        'oneOf',
+        'allOf',
+        'not',
+        'if',
+        'then',
+        'else',
+        'contains',
+        'prefixItems',
+        'propertyNames',
+        'dependentSchemas',
+        'dependentRequired',
     ];
 
     public function __construct(
@@ -171,13 +187,22 @@ final class GeminiProvider extends AbstractProvider
         // Use generationConfig with response_mime_type for structured output
         $responseSchema = $schemaData['schema'] ?? $schemaData['parameters'] ?? $schemaData;
 
-        // Strip unsupported schema fields for Gemini
-        unset($responseSchema['name'], $responseSchema['description']);
-        if (!isset($responseSchema['type'])) {
-            $responseSchema['type'] = 'OBJECT';
-        } else {
-            $responseSchema['type'] = strtoupper($responseSchema['type']);
+        if (!is_array($responseSchema)) {
+            return $this->chat($messages, [], $options);
         }
+
+        // responseSchema is the same Gemini Schema a function declaration's parameters are,
+        // and arrives from outside with the same shapes: a `type` that is an array, a
+        // lower-case type on a nested node, and, since json_decode() above returns arrays, an
+        // empty or "0", "1", … keyed `properties` map that would encode as a JSON list.
+        // JsonSchemaRepair::repair() turns those maps back into objects, and
+        // normalizeSchemaForGemini() then rewrites the schema as formatTools() does a tool's
+        // parameters. A type array that does not collapse to a single non-null type comes
+        // back with no `type` at all, so the OBJECT default is applied after the walk, not
+        // before it.
+        unset($responseSchema['name'], $responseSchema['description']);
+        $responseSchema = $this->normalizeSchemaForGemini(JsonSchemaRepair::repair($responseSchema));
+        $responseSchema['type'] ??= 'OBJECT';
 
         $options['generationConfig'] = array_merge(
             $options['generationConfig'] ?? [],
@@ -608,36 +633,104 @@ final class GeminiProvider extends AbstractProvider
     }
 
     /**
-     * Normalize JSON Schema for Gemini compatibility.
+     * Normalize JSON Schema for Gemini compatibility, at the depths the walk below reaches.
      *
-     * Gemini expects uppercase type names (STRING, NUMBER, OBJECT, etc.)
-     * and doesn't support some JSON Schema keywords.
+     * Gemini expects upper-case type names (STRING, OBJECT, …), a single type per
+     * node with `nullable` for "or null", and none of UNSUPPORTED_KEYWORDS. The walk
+     * descends through the members of `properties`, a single-schema `items` and the
+     * `anyOf` branches, so a raw schema's nested nodes are normalised as well as its
+     * top level. stripKeywords then unsets each UNSUPPORTED_KEYWORDS keyword — `$defs`,
+     * `oneOf`, `not` and `if` among them — on each node the walk reaches, and
+     * whatever the keyword holds goes with it. A child node left with nothing
+     * becomes `{}` in normalizeChildForGemini(). A subschema under a keyword the
+     * walk neither descends into nor strips, such as `unevaluatedProperties`, is
+     * passed through unchanged.
      *
-     * @param array<string, mixed> $schema
-     * @return array<string, mixed>
+     * stripKeywords acts on the node, not on its `properties` map, whose members are
+     * walked one by one: a property named `not` or `oneOf` keeps its name and is
+     * normalised, and a `required` list naming it is left as it is.
+     *
+     * JsonSchemaRepair restores an empty `{}` as a `\stdClass`, and casts to one a
+     * `properties` map whose keys run "0", "1", … in order, so a subschema or a map
+     * here may not be an array. A `properties` map that is a `\stdClass` is copied,
+     * its array members are normalised in the copy, and the copy goes out as a
+     * `\stdClass`, so it still encodes as a JSON object and the caller's object is
+     * left as it was. Gemini's `items` is one Schema, so a draft-04 tuple `items`, a
+     * non-empty list of subschemas, is replaced with `{}`, the schema that accepts
+     * anything. Anything else in those positions that is not an array is left alone
+     * rather than raising a TypeError.
+     *
+     * @param array<array-key, mixed> $schema
+     * @return array<array-key, mixed>
      */
     private function normalizeSchemaForGemini(array $schema): array
     {
-        // Convert type to uppercase (Gemini requirement)
+        if (isset($schema['type']) && is_array($schema['type'])) {
+            $types = array_values(array_filter($schema['type'], static fn(mixed $t): bool => $t !== 'null'));
+            if (count($types) < count($schema['type'])) {
+                $schema['nullable'] = true;
+            }
+            if (count($types) === 1 && is_string($types[0])) {
+                $schema['type'] = $types[0];
+            } else {
+                unset($schema['type']);
+            }
+        }
+
         if (isset($schema['type']) && is_string($schema['type'])) {
             $schema['type'] = strtoupper($schema['type']);
         }
 
-        // Recurse into properties
         if (isset($schema['properties']) && is_array($schema['properties'])) {
             foreach ($schema['properties'] as $key => $property) {
                 if (is_array($property)) {
-                    $schema['properties'][$key] = $this->normalizeSchemaForGemini($property);
+                    $schema['properties'][$key] = $this->normalizeChildForGemini($property);
+                }
+            }
+        } elseif (isset($schema['properties']) && $schema['properties'] instanceof \stdClass) {
+            $properties = clone $schema['properties'];
+            foreach (get_object_vars($properties) as $key => $property) {
+                if (is_array($property)) {
+                    $properties->{$key} = $this->normalizeChildForGemini($property);
+                }
+            }
+            $schema['properties'] = $properties;
+        }
+
+        if (isset($schema['items']) && is_array($schema['items'])) {
+            $schema['items'] = $schema['items'] !== [] && array_is_list($schema['items'])
+                ? new \stdClass()
+                : $this->normalizeChildForGemini($schema['items']);
+        }
+
+        if (isset($schema['anyOf']) && is_array($schema['anyOf'])) {
+            foreach ($schema['anyOf'] as $index => $variant) {
+                if (is_array($variant)) {
+                    $schema['anyOf'][$index] = $this->normalizeChildForGemini($variant);
                 }
             }
         }
 
-        // Recurse into items
-        if (isset($schema['items']) && is_array($schema['items'])) {
-            $schema['items'] = $this->normalizeSchemaForGemini($schema['items']);
-        }
-
         return SchemaUtils::stripKeywords($schema, self::UNSUPPORTED_KEYWORDS);
+    }
+
+    /**
+     * Normalize a subschema, keeping it an object when nothing survives.
+     *
+     * A node built only of UNSUPPORTED_KEYWORDS — `{"$ref": "#/$defs/x"}` from an MCP
+     * server — normalizes to an empty array, which json_encode() writes as `[]`. A
+     * subschema position must carry an object, so an emptied node becomes `{}`: the
+     * schema that accepts anything, which is what is left once the keyword that
+     * constrained it is gone.
+     *
+     * @param array<array-key, mixed> $schema
+     * @return array<array-key, mixed>|\stdClass
+     */
+    private function normalizeChildForGemini(array $schema): array|\stdClass
+    {
+        $normalized = $this->normalizeSchemaForGemini($schema);
+
+        return $normalized === [] ? new \stdClass() : $normalized;
     }
 
     /**
