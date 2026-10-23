@@ -2,6 +2,14 @@
 
 All notable changes to AiConnector will be documented here.
 
+## [1.1.3] — 2026-10-22
+
+### Changed
+- Re-vendored `carmelosantana/php-agents` v0.15.2 → v0.16.1, which keeps a Gemini
+  `structured()` schema's `properties` map an object (Kanboard #4556) and adds the
+  MCP client. Symfony HTTP client 8.1.1 → 8.1.9, contracts 3.7.1 → 3.7.3.
+  `composer audit`: no advisories.
+
 ## [1.1.2] — 2026-09-04
 
 ### Fixed
