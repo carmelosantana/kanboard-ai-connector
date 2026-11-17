@@ -2,6 +2,18 @@
 
 All notable changes to AiConnector will be documented here.
 
+## [1.1.3] — 2026-11-17
+
+### Security
+- Bumped `symfony/http-client` 8.1.1 → 8.1.11 (and `*-contracts` 3.7.1 → 3.8.1) for
+  CVE-2026-121971 (ScopingHttpClient leaked default-scope credentials to other origins)
+  and CVE-2026-123119 (NoPrivateNetworkHttpClient DNS-rebinding bypass).
+- Pinned `actions/checkout` in the release workflow to a commit SHA.
+
+### Fixed
+- Settings: **Remove** and **Make default** did nothing — the handlers read `profile_id`
+  from the query string while the forms POST it. They now read the form body.
+
 ## [1.1.2] — 2026-09-04
 
 ### Fixed
