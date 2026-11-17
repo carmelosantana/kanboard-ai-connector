@@ -166,10 +166,12 @@ return array(
     'Symfony\\Component\\HttpClient\\Internal\\Canary' => $vendorDir . '/symfony/http-client/Internal/Canary.php',
     'Symfony\\Component\\HttpClient\\Internal\\ClientState' => $vendorDir . '/symfony/http-client/Internal/ClientState.php',
     'Symfony\\Component\\HttpClient\\Internal\\CurlClientState' => $vendorDir . '/symfony/http-client/Internal/CurlClientState.php',
+    'Symfony\\Component\\HttpClient\\Internal\\Dechunker' => $vendorDir . '/symfony/http-client/Internal/Dechunker.php',
     'Symfony\\Component\\HttpClient\\Internal\\DnsCache' => $vendorDir . '/symfony/http-client/Internal/DnsCache.php',
     'Symfony\\Component\\HttpClient\\Internal\\FollowRedirectsTrait' => $vendorDir . '/symfony/http-client/Internal/FollowRedirectsTrait.php',
     'Symfony\\Component\\HttpClient\\Internal\\HttplugWaitLoop' => $vendorDir . '/symfony/http-client/Internal/HttplugWaitLoop.php',
     'Symfony\\Component\\HttpClient\\Internal\\NativeClientState' => $vendorDir . '/symfony/http-client/Internal/NativeClientState.php',
+    'Symfony\\Component\\HttpClient\\Internal\\OutgoingRequest' => $vendorDir . '/symfony/http-client/Internal/OutgoingRequest.php',
     'Symfony\\Component\\HttpClient\\Internal\\PushedResponse' => $vendorDir . '/symfony/http-client/Internal/PushedResponse.php',
     'Symfony\\Component\\HttpClient\\Messenger\\PingWebhookMessage' => $vendorDir . '/symfony/http-client/Messenger/PingWebhookMessage.php',
     'Symfony\\Component\\HttpClient\\Messenger\\PingWebhookMessageHandler' => $vendorDir . '/symfony/http-client/Messenger/PingWebhookMessageHandler.php',
@@ -222,4 +224,5 @@ return array(
     'Symfony\\Contracts\\Service\\ServiceProviderInterface' => $vendorDir . '/symfony/service-contracts/ServiceProviderInterface.php',
     'Symfony\\Contracts\\Service\\ServiceSubscriberInterface' => $vendorDir . '/symfony/service-contracts/ServiceSubscriberInterface.php',
     'Symfony\\Contracts\\Service\\ServiceSubscriberTrait' => $vendorDir . '/symfony/service-contracts/ServiceSubscriberTrait.php',
+    'Symfony\\Contracts\\Service\\ShutdownInterface' => $vendorDir . '/symfony/service-contracts/ShutdownInterface.php',
 );
