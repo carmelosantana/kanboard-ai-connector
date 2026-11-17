@@ -61,6 +61,11 @@ class SettingsController extends BaseController
         $label   = trim((string) ($values['label'] ?? ''));
         $model   = trim((string) ($values['model'] ?? ''));
         $baseUrl = trim((string) ($values['base_url'] ?? ''));
+        if (! ProviderRegistry::isValidBaseUrl($baseUrl)) {
+            $this->flash->failure(t('The base URL must be an http:// or https:// address with a host.'));
+            $this->redirectToShow();
+            return;
+        }
         if ($model === '') {
             $model = ProviderRegistry::DEFAULT_MODELS[$provider] ?? '';
         }
@@ -70,7 +75,8 @@ class SettingsController extends BaseController
 
         $id = trim((string) ($values['profile_id'] ?? ''));
         $profiles = $registry->getProfiles();
-        $isNew = ($id === '' || $registry->findProfile($id) === null);
+        $previous = $id !== '' ? $registry->findProfile($id) : null;
+        $isNew = $previous === null;
         if ($isNew) {
             $id = $this->mintId($label, count($profiles));
         }
@@ -97,10 +103,19 @@ class SettingsController extends BaseController
         $this->memoryCache->flush();
 
         // Key: only persist a real (non-placeholder, non-empty) submission.
+        // A stored key belongs to the endpoint it was entered for: when the
+        // provider or base URL host changes, it must be entered again.
         $submitted = trim((string) ($values['api_key'] ?? ''));
+        $keyCleared = false;
         if ($submitted !== '' && $submitted !== ProviderRegistry::KEY_PLACEHOLDER) {
             $this->configModel->save([ProviderRegistry::KEY_PREFIX . $id => $submitted]);
             $this->memoryCache->flush();
+        } elseif ($previous !== null
+            && ProviderRegistry::endpoint($previous['provider'], $previous['base_url']) !== ProviderRegistry::endpoint($provider, $baseUrl)
+            && $registry->hasStoredKey($id)) {
+            $this->configModel->save([ProviderRegistry::KEY_PREFIX . $id => '']);
+            $this->memoryCache->flush();
+            $keyCleared = true;
         }
 
         // First profile becomes the default.
@@ -109,7 +124,9 @@ class SettingsController extends BaseController
             $this->memoryCache->flush();
         }
 
-        $this->flash->success(t('Profile saved.'));
+        $this->flash->success($keyCleared
+            ? t('Profile saved.') . ' ' . t('The provider or base URL changed, so the stored API key was cleared. Enter the API key again.')
+            : t('Profile saved.'));
         $this->redirectToShow();
     }
 
@@ -201,8 +218,10 @@ class SettingsController extends BaseController
             );
             $this->response->json(['ok' => true]);
         } catch (\Throwable $e) {
-            // Message never contains the key (buildProvider guarantees this).
-            $this->response->json(['ok' => false, 'error' => $e->getMessage()]);
+            // Provider errors can carry upstream response text: log the class
+            // and code only, and give the browser a generic message.
+            $this->logger->error(sprintf('[AiConnector] Test connection failed: %s (code %s)', get_class($e), (string) $e->getCode()));
+            $this->response->json(['ok' => false, 'error' => t('Connection failed. Check the profile settings; details are in the server log.')]);
         }
     }
 
