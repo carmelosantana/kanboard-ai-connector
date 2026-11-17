@@ -30,7 +30,7 @@ class SettingsTest extends Base
         $this->container['userSession']->method('isAdmin')->willReturn(false);
     }
 
-    private function stubAdminWithForm(array $formValues, bool $csrfValid = true): void
+    private function stubAdminWithForm(array $formValues, bool $csrfValid = true, array $query = []): void
     {
         $this->container['userSession'] = $this->getMockBuilder(\Kanboard\Core\User\UserSession::class)
             ->setConstructorArgs([$this->container])->onlyMethods(['isAdmin', 'getId'])->getMock();
@@ -46,7 +46,8 @@ class SettingsTest extends Base
         $this->container['request']->method('getValues')->willReturn($formValues);
         $this->container['request']->method('getRawValue')->willReturn('dummy-csrf');
         $this->container['request']->method('getStringParam')->willReturnCallback(
-            fn (string $p, $d = '') => $formValues[$p] ?? $d
+            // Query string only — POST body fields are NOT visible here (matches core Request).
+            fn (string $p, $d = '') => $query[$p] ?? $d
         );
     }
 

@@ -284,6 +284,7 @@ class ComposerStaticInita4b71f478ae53f1b08cabe1c4e710314
         'Symfony\\Contracts\\Service\\ServiceProviderInterface' => __DIR__ . '/..' . '/symfony/service-contracts/ServiceProviderInterface.php',
         'Symfony\\Contracts\\Service\\ServiceSubscriberInterface' => __DIR__ . '/..' . '/symfony/service-contracts/ServiceSubscriberInterface.php',
         'Symfony\\Contracts\\Service\\ServiceSubscriberTrait' => __DIR__ . '/..' . '/symfony/service-contracts/ServiceSubscriberTrait.php',
+        'Symfony\\Contracts\\Service\\ShutdownInterface' => __DIR__ . '/..' . '/symfony/service-contracts/ShutdownInterface.php',
     );
 
     public static function getInitializer(ClassLoader $loader)
