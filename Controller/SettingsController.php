@@ -120,7 +120,8 @@ class SettingsController extends BaseController
         }
         $this->checkCSRFForm();
 
-        $id = $this->request->getStringParam('profile_id', '');
+        // The forms POST profile_id in the body; getStringParam() only reads the query string.
+        $id = trim((string) ($this->request->getValues()['profile_id'] ?? ''));
         $registry = new ProviderRegistry($this->container);
         $profiles = array_values(array_filter(
             $registry->getProfiles(),
@@ -150,7 +151,8 @@ class SettingsController extends BaseController
         }
         $this->checkCSRFForm();
 
-        $id = $this->request->getStringParam('profile_id', '');
+        // The forms POST profile_id in the body; getStringParam() only reads the query string.
+        $id = trim((string) ($this->request->getValues()['profile_id'] ?? ''));
         $registry = new ProviderRegistry($this->container);
         if ($registry->findProfile($id) !== null) {
             $this->configModel->save([ProviderRegistry::DEFAULT_KEY => $id]);
