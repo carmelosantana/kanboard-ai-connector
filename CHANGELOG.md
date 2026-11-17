@@ -2,6 +2,11 @@
 
 All notable changes to AiConnector will be documented here.
 
+## 1.1.5 — 2026-11-17
+
+### Fixed
+- Stored provider keys are bound to their endpoint, base URLs are validated, and Test Connection returns a generic error.
+
 ## [1.1.4] — 2026-11-17
 
 ### Security
