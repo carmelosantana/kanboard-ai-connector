@@ -88,6 +88,9 @@ class ProviderRegistry extends Base
         self::PROVIDER_OLLAMA => 'http://localhost:11434/v1',
     ];
 
+    /** Provider types whose requests go to the profile's base URL. */
+    public const BASE_URL_PROVIDERS = [self::PROVIDER_OPENAI, self::PROVIDER_OPENAI_RESPONSES, self::PROVIDER_OLLAMA];
+
     /** Config keys + masking sentinel. */
     public const PROFILES_KEY   = 'aiconnector_profiles';
     public const DEFAULT_KEY    = 'aiconnector_default';
@@ -337,6 +340,42 @@ class ProviderRegistry extends Base
      * Ollama base URL: profile override → OLLAMA_HOST (+ /v1) → php-agents default.
      * php-agents' OllamaProvider strips /v1 internally for its native endpoints.
      */
+    /** '' (use the default), or an absolute http(s) URL with a host and no credentials. */
+    public static function isValidBaseUrl(string $baseUrl): bool
+    {
+        if ($baseUrl === '') {
+            return true;
+        }
+        $parts = parse_url($baseUrl);
+        return is_array($parts)
+            && in_array(strtolower((string) ($parts['scheme'] ?? '')), ['http', 'https'], true)
+            && ($parts['host'] ?? '') !== ''
+            && ! isset($parts['user'])
+            && ! isset($parts['pass'])
+            && filter_var($baseUrl, FILTER_VALIDATE_URL) !== false;
+    }
+
+    /**
+     * Where a profile's requests (and its key) go: the provider type, plus the
+     * scheme://host:port of the base URL for providers that use one.
+     */
+    public static function endpoint(string $provider, string $baseUrl): string
+    {
+        if (! in_array($provider, self::BASE_URL_PROVIDERS, true)) {
+            return $provider;
+        }
+        $url = $baseUrl !== '' ? $baseUrl : (self::DEFAULT_BASE_URLS[$provider] ?? '');
+        $parts = $url !== '' ? parse_url($url) : false;
+        if (! is_array($parts) || ($parts['host'] ?? '') === '') {
+            return $provider;
+        }
+        $origin = strtolower(($parts['scheme'] ?? '') . '://' . $parts['host']);
+        if (isset($parts['port'])) {
+            $origin .= ':' . (int) $parts['port'];
+        }
+        return $provider . '|' . $origin;
+    }
+
     private function resolveOllamaBaseUrl(string $baseUrl): string
     {
         if ($baseUrl !== '') {
