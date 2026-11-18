@@ -113,6 +113,36 @@
 </form>
 
 <hr>
+<h3><?= t('Network Security') ?></h3>
+<p class="form-help">
+    <?= t('Applies to the URL that OpenAI-compatible, OpenAI Responses and Ollama profiles call. Checked when a profile is saved and again before every request, after DNS resolution.') ?>
+</p>
+
+<form method="post"
+      action="<?= $this->url->href('SettingsController', 'saveSecurity', ['plugin' => 'AiConnector']) ?>">
+    <?= $this->form->csrf() ?>
+
+    <?= $this->form->label(t('Allowed hosts'), 'allowed_hosts') ?>
+    <textarea name="allowed_hosts" id="allowed_hosts" class="form-textarea" rows="4"
+              placeholder="api.openai.com&#10;*.example.com&#10;192.168.1.20"><?= $this->text->e($allowed_hosts) ?></textarea>
+    <p class="form-help">
+        <?= t('One host or IP address per line; *.example.com matches its subdomains. Leave empty to allow any public host.') ?>
+    </p>
+
+    <label>
+        <input type="checkbox" name="allow_private" value="1" <?= $allow_private ? 'checked' : '' ?>>
+        <?= t('Allow providers on private networks (LAN, localhost), e.g. a local Ollama') ?>
+    </label>
+    <p class="form-help">
+        <?= t('Off by default. Link-local and cloud metadata addresses (169.254.169.254, fe80::/10) stay blocked either way. Combine with the allowed hosts to permit just your LAN server.') ?>
+    </p>
+
+    <div class="form-actions">
+        <button type="submit" class="btn btn-blue"><?= t('Save') ?></button>
+    </div>
+</form>
+
+<hr>
 <h3><?= t('Test Connection') ?></h3>
 <p class="form-help"><?= t('Verify a saved profile works. Select a profile and click Test.') ?></p>
 

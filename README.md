@@ -77,6 +77,25 @@ Generate-subtasks modal for an example.
 - Ollama base URL resolution order: profile `base_url` override →
   `OLLAMA_HOST` (with `/v1` appended) → `http://localhost:11434/v1`.
 
+## Network security (SSRF guard)
+
+Profiles that call a base URL (OpenAI-compatible, OpenAI Responses, Ollama) are
+checked when saved and again before every request, after DNS resolution:
+
+- **Allowed hosts** (Settings → AI Connector → Network Security): one host or IP
+  per line, `*.example.com` for subdomains. Empty allows any public host.
+- **Private networks** — RFC 1918, loopback, CGNAT (`100.64.0.0/10`), IPv6 `::1`
+  and `fc00::/7` — are refused unless **Allow providers on private networks** is
+  ticked. A local Ollama (including the `localhost` default and `OLLAMA_HOST`)
+  needs it.
+- **Always refused**: link-local and cloud metadata (`169.254.0.0/16`, incl.
+  `169.254.169.254`; `fe80::/10`; `fd00:ec2::254`; `100.100.100.200`), multicast,
+  reserved ranges, IPv4-mapped / NAT64 / 6to4 forms of those, and numeric
+  shorthand hosts such as `2130706433`.
+- The HTTP client is pinned to the checked address and does not follow redirects.
+
+Anthropic, Grok, Gemini and Mistral call fixed vendor hosts and ignore the base URL.
+
 ## Test Connection
 
 Each profile row on the Settings page has a **Test Connection** button

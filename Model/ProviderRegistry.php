@@ -84,8 +84,9 @@ class ProviderRegistry extends Base
 
     /** Default base URL per provider type (empty = use php-agents class default). */
     public const DEFAULT_BASE_URLS = [
-        self::PROVIDER_OPENAI => 'https://api.openai.com/v1',
-        self::PROVIDER_OLLAMA => 'http://localhost:11434/v1',
+        self::PROVIDER_OPENAI           => 'https://api.openai.com/v1',
+        self::PROVIDER_OPENAI_RESPONSES => 'https://api.openai.com/v1',
+        self::PROVIDER_OLLAMA           => 'http://localhost:11434/v1',
     ];
 
     /** Provider types whose requests go to the profile's base URL. */
@@ -249,27 +250,24 @@ class ProviderRegistry extends Base
 
         $type    = $profile['provider'];
         $model   = $profile['model'] !== '' ? $profile['model'] : (self::DEFAULT_MODELS[$type] ?? '');
-        $baseUrl = $profile['base_url'];
         $stored  = (string) $this->configModel->get(self::KEY_PREFIX . $id, '');
         $key     = $this->resolveKey($type, $stored);
 
+        // Base-URL providers: SSRF-check the URL and pin the client to the
+        // checked address. Throws UnsafeUrlException (no key in the message).
+        if (in_array($type, self::BASE_URL_PROVIDERS, true)) {
+            $baseUrl = $this->effectiveBaseUrl($type, $profile['base_url']);
+            $client  = UrlGuard::fromConfig($this->configModel)->httpClient($baseUrl, ['timeout' => 300]);
+        }
+
         return match ($type) {
             self::PROVIDER_ANTHROPIC => new AnthropicProvider(model: $model, apiKey: $key),
-            self::PROVIDER_OPENAI => new OpenAICompatibleProvider(
-                model: $model,
-                baseUrl: $baseUrl !== '' ? $baseUrl : self::DEFAULT_BASE_URLS[self::PROVIDER_OPENAI],
-                apiKey: $key,
-            ),
-            self::PROVIDER_OPENAI_RESPONSES => $baseUrl !== ''
-                ? new OpenAIResponsesProvider(model: $model, baseUrl: $baseUrl, apiKey: $key)
-                : new OpenAIResponsesProvider(model: $model, apiKey: $key),
+            self::PROVIDER_OPENAI => new OpenAICompatibleProvider(model: $model, baseUrl: $baseUrl, apiKey: $key, httpClient: $client),
+            self::PROVIDER_OPENAI_RESPONSES => new OpenAIResponsesProvider(model: $model, baseUrl: $baseUrl, apiKey: $key, httpClient: $client),
             self::PROVIDER_GROK    => new XAIProvider(model: $model, apiKey: $key),
             self::PROVIDER_GEMINI  => new GeminiProvider(model: $model, apiKey: $key),
             self::PROVIDER_MISTRAL => new MistralProvider(model: $model, apiKey: $key),
-            self::PROVIDER_OLLAMA  => new OllamaProvider(
-                model: $model,
-                baseUrl: $this->resolveOllamaBaseUrl($baseUrl),
-            ),
+            self::PROVIDER_OLLAMA  => new OllamaProvider(model: $model, baseUrl: $baseUrl, httpClient: $client),
             default => throw new \RuntimeException(sprintf(
                 '[AiConnector] Unsupported provider type "%s". Supported: %s',
                 $type,
@@ -336,10 +334,6 @@ class ProviderRegistry extends Base
         return [];
     }
 
-    /**
-     * Ollama base URL: profile override → OLLAMA_HOST (+ /v1) → php-agents default.
-     * php-agents' OllamaProvider strips /v1 internally for its native endpoints.
-     */
     /** '' (use the default), or an absolute http(s) URL with a host and no credentials. */
     public static function isValidBaseUrl(string $baseUrl): bool
     {
@@ -376,15 +370,22 @@ class ProviderRegistry extends Base
         return $provider . '|' . $origin;
     }
 
-    private function resolveOllamaBaseUrl(string $baseUrl): string
+    /**
+     * The URL a base-URL provider's requests actually go to: the profile's
+     * base URL, else (Ollama) OLLAMA_HOST + /v1, else the provider default.
+     * php-agents' OllamaProvider strips /v1 internally for its native endpoints.
+     */
+    public function effectiveBaseUrl(string $provider, string $baseUrl): string
     {
         if ($baseUrl !== '') {
             return $baseUrl;
         }
-        $host = getenv('OLLAMA_HOST');
-        if ($host !== false && $host !== '') {
-            return rtrim($host, '/') . '/v1';
+        if ($provider === self::PROVIDER_OLLAMA) {
+            $host = getenv('OLLAMA_HOST');
+            if ($host !== false && $host !== '') {
+                return rtrim($host, '/') . '/v1';
+            }
         }
-        return self::DEFAULT_BASE_URLS[self::PROVIDER_OLLAMA];
+        return self::DEFAULT_BASE_URLS[$provider] ?? '';
     }
 }

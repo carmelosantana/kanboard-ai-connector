@@ -13,6 +13,8 @@ use CarmeloSantana\PHPAgents\Provider\OllamaProvider;
 use CarmeloSantana\PHPAgents\Provider\Response;
 use CarmeloSantana\PHPAgents\Enum\ProviderFinishReason;
 use Kanboard\Plugin\AiConnector\Model\ProviderRegistry;
+use Kanboard\Plugin\AiConnector\Model\UnsafeUrlException;
+use Kanboard\Plugin\AiConnector\Model\UrlGuard;
 use KanboardTests\units\Base;
 
 /**
@@ -27,6 +29,24 @@ class ProviderRegistryBuildTest extends Base
         if (file_exists($autoload)) {
             require_once $autoload;
         }
+    }
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        UrlGuard::setResolverForTesting(fn (string $host): array => match ($host) {
+            'api.openai.com'  => ['162.159.140.245'],
+            'localhost'       => ['127.0.0.1'],
+            'gw.example.com'  => ['93.184.216.34'],
+            'evil.example'    => ['169.254.169.254'],
+            default           => [],
+        });
+    }
+
+    protected function tearDown(): void
+    {
+        UrlGuard::setResolverForTesting(null);
+        parent::tearDown();
     }
 
     private function seed(string $option, string $value): void
@@ -54,6 +74,7 @@ class ProviderRegistryBuildTest extends Base
 
     public function testBuildEachProviderType(): void
     {
+        $this->seed(UrlGuard::ALLOW_PRIVATE_KEY, '1'); // the Ollama default is localhost
         $cases = [
             [ProviderRegistry::PROVIDER_ANTHROPIC,        'claude-sonnet-4-20250514', AnthropicProvider::class],
             [ProviderRegistry::PROVIDER_OPENAI,           'gpt-4o',                   OpenAICompatibleProvider::class],
@@ -158,5 +179,77 @@ class ProviderRegistryBuildTest extends Base
             ['role' => 'weird', 'content' => 'fallback-to-user'],
         ], '{}');
         $this->assertSame(['ok' => 1], $out);
+    }
+
+    // ── SSRF guard ──────────────────────────────────────────────────────────────
+
+    private function pinnedResolve(ProviderInterface $provider): array
+    {
+        $client = (new \ReflectionProperty(\CarmeloSantana\PHPAgents\Provider\AbstractProvider::class, 'httpClient'))->getValue($provider);
+        $opts = (new \ReflectionProperty($client, 'defaultOptions'))->getValue($client);
+        $this->assertSame(0, $opts['max_redirects']);
+        return $opts['resolve'];
+    }
+
+    public function testBaseUrlProvidersGetAClientPinnedToTheCheckedAddress(): void
+    {
+        $r = $this->seedOne(ProviderRegistry::PROVIDER_OPENAI, 'gpt-4o', 'k', 'https://gw.example.com/v1');
+        $this->assertSame(['gw.example.com' => '93.184.216.34'], $this->pinnedResolve($r->buildProvider()));
+
+        $r = $this->seedOne(ProviderRegistry::PROVIDER_OPENAI_RESPONSES, 'gpt-5', 'k');
+        $this->assertSame(['api.openai.com' => '162.159.140.245'], $this->pinnedResolve($r->buildProvider()));
+
+        $this->seed(UrlGuard::ALLOW_PRIVATE_KEY, '1');
+        $r = $this->seedOne(ProviderRegistry::PROVIDER_OLLAMA, 'llama3.2', '');
+        $this->assertSame(['localhost' => '127.0.0.1'], $this->pinnedResolve($r->buildProvider()));
+    }
+
+    public function testMetadataBaseUrlIsRefusedWithoutLeakingTheKey(): void
+    {
+        $this->seed(UrlGuard::ALLOW_PRIVATE_KEY, '1');
+        $r = $this->seedOne(ProviderRegistry::PROVIDER_OPENAI, 'gpt-4o', 'super-secret-key', 'http://evil.example/v1');
+        try {
+            $r->buildProvider();
+            $this->fail('expected UnsafeUrlException');
+        } catch (UnsafeUrlException $e) {
+            $this->assertInstanceOf(\RuntimeException::class, $e);
+            $this->assertSame(UnsafeUrlException::BLOCKED_ADDRESS, $e->reason);
+            $this->assertStringNotContainsString('super-secret-key', $e->getMessage());
+        }
+    }
+
+    public function testLocalOllamaNeedsTheLanOptIn(): void
+    {
+        $r = $this->seedOne(ProviderRegistry::PROVIDER_OLLAMA, 'llama3.2', '');
+        $this->expectException(UnsafeUrlException::class);
+        $r->buildProvider();
+    }
+
+    public function testOllamaHostEnvIsGuardedToo(): void
+    {
+        putenv('OLLAMA_HOST=http://evil.example:11434');
+        try {
+            $this->seed(UrlGuard::ALLOW_PRIVATE_KEY, '1');
+            $r = $this->seedOne(ProviderRegistry::PROVIDER_OLLAMA, 'llama3.2', '');
+            $this->expectException(UnsafeUrlException::class);
+            $r->buildProvider();
+        } finally {
+            putenv('OLLAMA_HOST');
+        }
+    }
+
+    public function testAllowListAppliesToBaseUrlProviders(): void
+    {
+        $this->seed(UrlGuard::ALLOWED_HOSTS_KEY, 'api.openai.com');
+        $r = $this->seedOne(ProviderRegistry::PROVIDER_OPENAI, 'gpt-4o', 'k', 'https://gw.example.com/v1');
+        $this->expectException(UnsafeUrlException::class);
+        $r->buildProvider();
+    }
+
+    public function testFixedHostProvidersAreNotAffectedByTheAllowList(): void
+    {
+        $this->seed(UrlGuard::ALLOWED_HOSTS_KEY, 'api.openai.com');
+        $r = $this->seedOne(ProviderRegistry::PROVIDER_ANTHROPIC, 'm', 'k');
+        $this->assertInstanceOf(AnthropicProvider::class, $r->buildProvider());
     }
 }

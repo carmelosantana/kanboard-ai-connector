@@ -2,6 +2,27 @@
 
 All notable changes to AiConnector will be documented here.
 
+## Unreleased
+
+### Security
+- SSRF hardening for provider base URLs (OpenAI-compatible, OpenAI Responses, Ollama).
+  The URL is checked when a profile is saved and before every request, after DNS
+  resolution: private, loopback and CGNAT addresses (incl. IPv6 `::1`, `fc00::/7`
+  and IPv4-mapped forms) need the new **Allow providers on private networks** opt-in;
+  link-local and cloud-metadata addresses (`169.254.0.0/16`, `fe80::/10`,
+  `fd00:ec2::254`, `100.100.100.200`), multicast and reserved ranges are always
+  refused; numeric shorthand hosts (`2130706433`, `0x7f.1`) are refused.
+- New admin **Allowed hosts** list (exact hosts / IPs or `*.domain`); empty allows any
+  public host.
+- Requests go through an HTTP client pinned to the checked address with redirects
+  off, so DNS re-binding or a 30x cannot move them. Applies to the Ollama
+  `/api/show` context lookup too.
+
+### Upgrade note
+- A local Ollama (the default `http://localhost:11434`, `OLLAMA_HOST`, or a LAN
+  address) stops working until an admin ticks **Allow providers on private
+  networks** in Settings → AI Connector → Network Security.
+
 ## 1.1.5 — 2026-11-17
 
 ### Fixed
