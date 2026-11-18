@@ -2,7 +2,7 @@
 
 All notable changes to AiConnector will be documented here.
 
-## Unreleased
+## 1.1.6 - 2026-11-18
 
 ### Security
 - SSRF hardening for provider base URLs (OpenAI-compatible, OpenAI Responses, Ollama).
