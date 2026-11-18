@@ -219,4 +219,24 @@ class ModelCatalogTest extends Base
         $this->assertNull($c->pub(['model_info' => ['general.architecture' => 'llama']]));
         $this->assertNull($c->pub(['model_info' => ['general.architecture' => 'llama', 'llama.context_length' => 'NaN']]));
     }
+
+    // ── SSRF guard on the live Ollama /api/show path ──────────────────────────────
+
+    public function testOllamaShowRefusesBlockedHostsBeforeAnyRequest(): void
+    {
+        $asked = [];
+        \Kanboard\Plugin\AiConnector\Model\UrlGuard::setResolverForTesting(function (string $host) use (&$asked): array {
+            $asked[] = $host;
+            return ['169.254.169.254'];
+        });
+        try {
+            $catalog = new class($this->container) extends ModelCatalog {
+                public function show(array $profile): ?int { return $this->ollamaShowContext($profile, 'llama3.2'); }
+            };
+            $this->assertNull($catalog->show(['provider' => 'ollama', 'base_url' => 'http://evil.example:11434/v1']));
+            $this->assertSame(['evil.example'], $asked);
+        } finally {
+            \Kanboard\Plugin\AiConnector\Model\UrlGuard::setResolverForTesting(null);
+        }
+    }
 }

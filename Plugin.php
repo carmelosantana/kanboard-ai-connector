@@ -41,6 +41,7 @@ class Plugin extends Base
         // ── Settings routes ───────────────────────────────────────────────────
         $this->route->addRoute('ai-connector/settings', 'SettingsController', 'show');
         $this->route->addRoute('ai-connector/save',     'SettingsController', 'save');
+        $this->route->addRoute('ai-connector/security', 'SettingsController', 'saveSecurity');
         $this->route->addRoute('ai-connector/delete',   'SettingsController', 'delete');
         $this->route->addRoute('ai-connector/default',  'SettingsController', 'setDefault');
         $this->route->addRoute('ai-connector/test',     'SettingsController', 'testConnection');
@@ -63,7 +64,7 @@ class Plugin extends Base
 
     public function getPluginVersion(): string
     {
-        return '1.1.5';
+        return '1.1.6';
     }
 
     public function getPluginHomepage(): string

@@ -141,14 +141,12 @@ class ModelCatalog extends Base
     protected function ollamaShowContext(array $profile, string $model): ?int
     {
         try {
-            $base = (string) ($profile['base_url'] ?? '');
-            if ($base === '') {
-                $host = getenv('OLLAMA_HOST');
-                $base = ($host !== false && $host !== '') ? $host : 'http://localhost:11434';
-            }
+            $registry = new ProviderRegistry($this->container);
+            $base = $registry->effectiveBaseUrl(ProviderRegistry::PROVIDER_OLLAMA, (string) ($profile['base_url'] ?? ''));
+            // SSRF guard: refused hosts throw here, before any request.
+            $client = UrlGuard::fromConfig($this->configModel)->httpClient($base);
             $base = preg_replace('#/v1/?$#', '', rtrim($base, '/'));
 
-            $client   = \Symfony\Component\HttpClient\HttpClient::create();
             $response = $client->request('POST', $base . '/api/show', [
                 'json'    => ['name' => $model],
                 'timeout' => 5,

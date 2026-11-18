@@ -4,6 +4,7 @@ require_once 'tests/units/Base.php';
 
 use Kanboard\Plugin\AiConnector\Controller\SettingsController;
 use Kanboard\Plugin\AiConnector\Model\ProviderRegistry;
+use Kanboard\Plugin\AiConnector\Model\UrlGuard;
 use KanboardTests\units\Base;
 
 /**
@@ -14,6 +15,23 @@ class SettingsEndpointTest extends Base
 {
     private array $json = [];
     private array $flashes = [];
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        UrlGuard::setResolverForTesting(fn (string $host): array => match ($host) {
+            'api.openai.com', 'other.example.com' => ['93.184.216.34'],
+            'localhost'    => ['127.0.0.1'],
+            'evil.example' => ['169.254.169.254'],
+            default        => [],
+        });
+    }
+
+    protected function tearDown(): void
+    {
+        UrlGuard::setResolverForTesting(null);
+        parent::tearDown();
+    }
 
     private function seed(string $option, string $value): void
     {
@@ -165,13 +183,105 @@ class SettingsEndpointTest extends Base
         ];
     }
 
-    public function testValidHttpBaseUrlIsAccepted(): void
+    public function testLanBaseUrlNeedsTheOptIn(): void
     {
+        $this->seedProfile('ollama', '', '');
+        $this->save(['provider' => 'ollama', 'base_url' => 'http://192.168.1.20:11434/v1']);
+
+        $this->assertArrayHasKey('failure', $this->flashes);
+        $this->assertStringContainsString('private network', $this->flashes['failure']);
+        $this->assertSame('', $this->storedBaseUrl());
+    }
+
+    public function testLanBaseUrlIsAcceptedWithTheOptIn(): void
+    {
+        $this->seed(UrlGuard::ALLOW_PRIVATE_KEY, '1');
         $this->seedProfile('ollama', '', '');
         $this->save(['provider' => 'ollama', 'base_url' => 'http://192.168.1.20:11434/v1']);
 
         $this->assertArrayNotHasKey('failure', $this->flashes);
         $this->assertSame('http://192.168.1.20:11434/v1', $this->storedBaseUrl());
+    }
+
+    public function testDefaultLocalOllamaNeedsTheOptIn(): void
+    {
+        $this->seedProfile('anthropic', '');
+        $this->save(['provider' => 'ollama', 'base_url' => '']);
+
+        $this->assertArrayHasKey('failure', $this->flashes);
+        $this->assertSame('anthropic', (new ProviderRegistry($this->container))->findProfile('p1')['provider']);
+    }
+
+    public function testMetadataBaseUrlIsRefusedEvenWithTheOptIn(): void
+    {
+        $this->seed(UrlGuard::ALLOW_PRIVATE_KEY, '1');
+        $this->seedProfile('openai', 'https://api.openai.com/v1');
+        $this->save(['provider' => 'openai', 'base_url' => 'http://evil.example/latest']);
+
+        $this->assertArrayHasKey('failure', $this->flashes);
+        $this->assertSame('https://api.openai.com/v1', $this->storedBaseUrl());
+        $this->assertSame('stored-key', $this->storedKey());
+    }
+
+    public function testHostOutsideTheAllowListIsRefused(): void
+    {
+        $this->seed(UrlGuard::ALLOWED_HOSTS_KEY, 'api.openai.com');
+        $this->seedProfile('openai', 'https://api.openai.com/v1');
+        $this->save(['provider' => 'openai', 'base_url' => 'https://other.example.com/v1']);
+
+        $this->assertArrayHasKey('failure', $this->flashes);
+        $this->assertStringContainsString('allow-list', $this->flashes['failure']);
+        $this->assertSame('stored-key', $this->storedKey());
+    }
+
+    public function testBaseUrlIgnoredByTheProviderIsNotResolved(): void
+    {
+        $this->seedProfile('anthropic', '');
+        $this->save(['provider' => 'anthropic', 'base_url' => 'http://evil.example/']);
+
+        $this->assertArrayNotHasKey('failure', $this->flashes);
+    }
+
+    // ── network security settings ────────────────────────────────────────────────
+
+    private function saveSecurity(array $values): void
+    {
+        $this->stubAdmin($values);
+        (new SettingsController($this->container))->saveSecurity();
+    }
+
+    private function config(string $key): string
+    {
+        $this->container['memoryCache']->flush();
+        return (string) $this->container['configModel']->get($key, '');
+    }
+
+    public function testSaveSecurityStoresTheNormalisedAllowListAndOptIn(): void
+    {
+        $this->saveSecurity(['allowed_hosts' => "API.openai.com\n*.example.com\n\n", 'allow_private' => '1']);
+
+        $this->assertArrayNotHasKey('failure', $this->flashes);
+        $this->assertSame("api.openai.com\n*.example.com", $this->config(UrlGuard::ALLOWED_HOSTS_KEY));
+        $this->assertSame('1', $this->config(UrlGuard::ALLOW_PRIVATE_KEY));
+    }
+
+    public function testSaveSecurityUncheckedOptInIsStoredAsOff(): void
+    {
+        $this->seed(UrlGuard::ALLOW_PRIVATE_KEY, '1');
+        $this->saveSecurity(['allowed_hosts' => '']);
+
+        $this->assertSame('0', $this->config(UrlGuard::ALLOW_PRIVATE_KEY));
+        $this->assertSame('', $this->config(UrlGuard::ALLOWED_HOSTS_KEY));
+    }
+
+    public function testSaveSecurityRefusesInvalidEntries(): void
+    {
+        $this->seed(UrlGuard::ALLOWED_HOSTS_KEY, 'api.openai.com');
+        $this->saveSecurity(['allowed_hosts' => "https://api.openai.com/v1", 'allow_private' => '1']);
+
+        $this->assertArrayHasKey('failure', $this->flashes);
+        $this->assertSame('api.openai.com', $this->config(UrlGuard::ALLOWED_HOSTS_KEY));
+        $this->assertSame('', $this->config(UrlGuard::ALLOW_PRIVATE_KEY));
     }
 
     public function testTestConnectionReturnsAGenericError(): void
@@ -182,5 +292,16 @@ class SettingsEndpointTest extends Base
         $this->assertFalse($this->json['ok']);
         $this->assertStringNotContainsString('no-such-profile-xyz', $this->json['error']);
         $this->assertStringNotContainsString('AiConnector]', $this->json['error']);
+    }
+
+    public function testTestConnectionExplainsAGuardRefusal(): void
+    {
+        $this->seedProfile('openai', 'http://evil.example/v1', 'super-secret-key');
+        $this->stubAdmin([], ['profile' => 'p1', 'csrf_token' => 't']);
+        (new SettingsController($this->container))->testConnection();
+
+        $this->assertFalse($this->json['ok']);
+        $this->assertStringContainsString('always blocked', $this->json['error']);
+        $this->assertStringNotContainsString('super-secret-key', $this->json['error']);
     }
 }

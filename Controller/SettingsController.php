@@ -5,6 +5,8 @@ namespace Kanboard\Plugin\AiConnector\Controller;
 use Kanboard\Controller\BaseController;
 use Kanboard\Core\Controller\AccessForbiddenException;
 use Kanboard\Plugin\AiConnector\Model\ProviderRegistry;
+use Kanboard\Plugin\AiConnector\Model\UnsafeUrlException;
+use Kanboard\Plugin\AiConnector\Model\UrlGuard;
 
 /**
  * AiConnector settings — admin-only CRUD over provider profiles.
@@ -38,6 +40,8 @@ class SettingsController extends BaseController
             // Reusable CSRF token for the (external) Test-Connection fetch (Task 4).
             // MUST be generated here — `token` is not a template helper.
             'ai_test_csrf'   => $this->token->getReusableCSRFToken(),
+            'allowed_hosts'  => implode("\n", UrlGuard::parseHostList((string) $this->configModel->get(UrlGuard::ALLOWED_HOSTS_KEY, ''))),
+            'allow_private'  => (string) $this->configModel->get(UrlGuard::ALLOW_PRIVATE_KEY, '') === '1',
         ]));
     }
 
@@ -65,6 +69,17 @@ class SettingsController extends BaseController
             $this->flash->failure(t('The base URL must be an http:// or https:// address with a host.'));
             $this->redirectToShow();
             return;
+        }
+        // SSRF guard: the URL this profile's requests would go to must pass the
+        // allow-list and private-network rules (checked after DNS resolution).
+        if (in_array($provider, ProviderRegistry::BASE_URL_PROVIDERS, true)) {
+            try {
+                UrlGuard::fromConfig($this->configModel)->check($registry->effectiveBaseUrl($provider, $baseUrl));
+            } catch (UnsafeUrlException $e) {
+                $this->flash->failure(t('Profile not saved.') . ' ' . $e->getMessage());
+                $this->redirectToShow();
+                return;
+            }
         }
         if ($model === '') {
             $model = ProviderRegistry::DEFAULT_MODELS[$provider] ?? '';
@@ -127,6 +142,33 @@ class SettingsController extends BaseController
         $this->flash->success($keyCleared
             ? t('Profile saved.') . ' ' . t('The provider or base URL changed, so the stored API key was cleared. Enter the API key again.')
             : t('Profile saved.'));
+        $this->redirectToShow();
+    }
+
+    /** Save the network security settings: host allow-list + LAN opt-in. */
+    public function saveSecurity(): void
+    {
+        if (! $this->userSession->isAdmin()) {
+            throw new AccessForbiddenException();
+        }
+        $this->checkCSRFForm();
+
+        $values = $this->request->getValues();
+        $hosts  = UrlGuard::parseHostList((string) ($values['allowed_hosts'] ?? ''));
+        $invalid = array_values(array_filter($hosts, fn (string $h) => ! UrlGuard::isValidHostEntry($h)));
+        if ($invalid !== []) {
+            $this->flash->failure(t('Not a host name or IP address: %s', implode(', ', $invalid)));
+            $this->redirectToShow();
+            return;
+        }
+
+        $this->configModel->save([
+            UrlGuard::ALLOWED_HOSTS_KEY => implode("\n", $hosts),
+            UrlGuard::ALLOW_PRIVATE_KEY => ! empty($values['allow_private']) ? '1' : '0',
+        ]);
+        $this->memoryCache->flush();
+
+        $this->flash->success(t('Network security settings saved.'));
         $this->redirectToShow();
     }
 
@@ -217,6 +259,10 @@ class SettingsController extends BaseController
                 $profileId !== '' ? $profileId : null
             );
             $this->response->json(['ok' => true]);
+        } catch (UnsafeUrlException $e) {
+            // The guard's own message names only the host and the reason.
+            $this->logger->error(sprintf('[AiConnector] Test connection refused by the URL guard: %s', $e->reason));
+            $this->response->json(['ok' => false, 'error' => $e->getMessage()]);
         } catch (\Throwable $e) {
             // Provider errors can carry upstream response text: log the class
             // and code only, and give the browser a generic message.
