@@ -2,6 +2,17 @@
 
 All notable changes to AiConnector will be documented here.
 
+## 1.2.0 - 2026-11-19
+
+### Changed
+- Bundled `php-agents` bumped to 0.17.0: `RunLimits` and `$providerOptions` on
+  `AbstractAgent`, image resolvers, and new finish reasons (`refusal`,
+  `content_filter`, `context_window_exceeded`, `pause_turn`).
+  Plugins that use AiConnector's bundled `php-agents` get these classes.
+- The default Anthropic model (prefill for new profiles and fallback for profiles
+  with no model) is now `claude-sonnet-5-5`, replacing `claude-sonnet-4-20250514`.
+  Profiles with a model already set are unchanged.
+
 ## 1.1.6 - 2026-11-18
 
 ### Security
