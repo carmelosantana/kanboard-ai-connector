@@ -34,7 +34,7 @@ AiConnector supports seven provider types, all over HTTP via `php-agents`:
 
 | Provider type | Label | Default model | Env var fallback |
 |---|---|---|---|
-| `anthropic` | Anthropic (Claude) | `claude-sonnet-4-20250514` | `ANTHROPIC_API_KEY` |
+| `anthropic` | Anthropic (Claude) | `claude-sonnet-5-5` | `ANTHROPIC_API_KEY` |
 | `openai` | OpenAI (Chat Completions) | `gpt-4o` | `OPENAI_API_KEY` |
 | `openai_responses` | OpenAI Responses (Codex / gpt-5) | `gpt-5` | `OPENAI_API_KEY` |
 | `grok` | Grok (xAI) | `grok-3` | `XAI_API_KEY` |

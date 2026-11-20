@@ -60,7 +60,7 @@ class ProviderRegistry extends Base
 
     /** Default model id per provider type (placeholder/prefill only). */
     public const DEFAULT_MODELS = [
-        self::PROVIDER_ANTHROPIC        => 'claude-sonnet-4-20250514',
+        self::PROVIDER_ANTHROPIC        => 'claude-sonnet-5-5',
         self::PROVIDER_OPENAI           => 'gpt-4o',
         self::PROVIDER_OPENAI_RESPONSES => 'gpt-5',
         self::PROVIDER_GROK             => 'grok-3',

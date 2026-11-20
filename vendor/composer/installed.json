@@ -2,17 +2,17 @@
     "packages": [
         {
             "name": "carmelosantana/php-agents",
-            "version": "v0.16.1",
-            "version_normalized": "0.16.1.0",
+            "version": "v0.17.0",
+            "version_normalized": "0.17.0.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/carmelosantana/php-agents.git",
-                "reference": "ce4ffe73e45f8f7e5dfcfd9e2d47d0e8393f7436"
+                "reference": "f8151ae2460cfd1311885a3257b867b933796dc5"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/carmelosantana/php-agents/zipball/ce4ffe73e45f8f7e5dfcfd9e2d47d0e8393f7436",
-                "reference": "ce4ffe73e45f8f7e5dfcfd9e2d47d0e8393f7436",
+                "url": "https://api.github.com/repos/carmelosantana/php-agents/zipball/f8151ae2460cfd1311885a3257b867b933796dc5",
+                "reference": "f8151ae2460cfd1311885a3257b867b933796dc5",
                 "shasum": ""
             },
             "require": {
@@ -28,7 +28,8 @@
                 "hkulekci/qdrant": "Vector similarity search for persistent agent memory",
                 "yethee/tiktoken-php": "Accurate token counting for OpenAI models (cl100k_base, o200k_base)"
             },
-            "time": "2026-09-30T16:42:42+00:00",
+            "time": "2026-11-18T20:20:10+00:00",
+            "published-time": "2026-11-19T01:43:00+00:00",
             "type": "library",
             "extra": {
                 "php-agents": []
@@ -58,7 +59,7 @@
             ],
             "support": {
                 "issues": "https://github.com/carmelosantana/php-agents/issues",
-                "source": "https://github.com/carmelosantana/php-agents/tree/v0.16.1"
+                "source": "https://github.com/carmelosantana/php-agents/tree/v0.17.0"
             },
             "install-path": "../carmelosantana/php-agents"
         },
