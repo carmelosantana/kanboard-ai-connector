@@ -5,6 +5,7 @@ require_once 'tests/units/Base.php';
 use Kanboard\Plugin\AiConnector\Model\UnsafeUrlException;
 use Kanboard\Plugin\AiConnector\Model\UrlGuard;
 use KanboardTests\units\Base;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * SSRF guard for provider base URLs: host allow-list, private / loopback /
@@ -45,6 +46,7 @@ class UrlGuardTest extends Base
     }
 
     /** @dataProvider privateAddresses */
+    #[DataProvider('privateAddresses')]
     public function testPrivateAddressesAreRefusedByDefault(string $ip): void
     {
         $this->dns(['internal.example' => [$ip]]);
@@ -52,6 +54,7 @@ class UrlGuardTest extends Base
     }
 
     /** @dataProvider privateAddresses */
+    #[DataProvider('privateAddresses')]
     public function testPrivateAddressesAreAllowedWithTheLanOptIn(string $ip): void
     {
         $this->dns(['internal.example' => [$ip]]);
@@ -74,6 +77,7 @@ class UrlGuardTest extends Base
     }
 
     /** @dataProvider alwaysBlockedAddresses */
+    #[DataProvider('alwaysBlockedAddresses')]
     public function testMetadataAndLinkLocalStayBlockedEvenWithTheLanOptIn(string $ip): void
     {
         $this->dns(['evil.example' => [$ip]]);
@@ -185,6 +189,7 @@ class UrlGuardTest extends Base
     }
 
     /** @dataProvider invalidHostEntries */
+    #[DataProvider('invalidHostEntries')]
     public function testInvalidHostEntries(string $entry): void
     {
         $this->assertFalse(UrlGuard::isValidHostEntry($entry), $entry);
