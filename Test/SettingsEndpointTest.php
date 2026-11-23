@@ -6,6 +6,7 @@ use Kanboard\Plugin\AiConnector\Controller\SettingsController;
 use Kanboard\Plugin\AiConnector\Model\ProviderRegistry;
 use Kanboard\Plugin\AiConnector\Model\UrlGuard;
 use KanboardTests\units\Base;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * A stored key stays with the endpoint it was entered for; base URLs are
@@ -161,6 +162,7 @@ class SettingsEndpointTest extends Base
     }
 
     /** @dataProvider invalidBaseUrls */
+    #[DataProvider('invalidBaseUrls')]
     public function testInvalidBaseUrlIsRefused(string $url): void
     {
         $this->seedProfile('openai', 'https://api.openai.com/v1');
