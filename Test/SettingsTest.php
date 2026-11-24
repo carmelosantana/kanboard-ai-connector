@@ -3,7 +3,7 @@
 require_once 'tests/units/Base.php';
 
 use Kanboard\Core\Controller\AccessForbiddenException;
-use Kanboard\Plugin\AiConnector\Controller\SettingsController;
+use Kanboard\Plugin\AiConnector\Controller\AiConnectorSettingsController;
 use Kanboard\Plugin\AiConnector\Model\ProviderRegistry;
 use KanboardTests\units\Base;
 
@@ -54,7 +54,7 @@ class SettingsTest extends Base
     private function driveSave(): void
     {
         try {
-            (new SettingsController($this->container))->save();
+            (new AiConnectorSettingsController($this->container))->save();
         } catch (\Throwable $e) {
             // redirect() exits/throws in test context — expected.
         }
@@ -63,7 +63,7 @@ class SettingsTest extends Base
     private function driveDelete(): void
     {
         try {
-            (new SettingsController($this->container))->delete();
+            (new AiConnectorSettingsController($this->container))->delete();
         } catch (\Throwable $e) {
             // redirect() exits/throws in test context — expected.
         }
@@ -72,7 +72,7 @@ class SettingsTest extends Base
     private function driveSetDefault(): void
     {
         try {
-            (new SettingsController($this->container))->setDefault();
+            (new AiConnectorSettingsController($this->container))->setDefault();
         } catch (\Throwable $e) {
             // redirect() exits/throws in test context — expected.
         }
@@ -82,28 +82,28 @@ class SettingsTest extends Base
     {
         $this->stubNonAdmin();
         $this->expectException(AccessForbiddenException::class);
-        (new SettingsController($this->container))->show();
+        (new AiConnectorSettingsController($this->container))->show();
     }
 
     public function testSaveThrowsForNonAdmin(): void
     {
         $this->stubNonAdmin();
         $this->expectException(AccessForbiddenException::class);
-        (new SettingsController($this->container))->save();
+        (new AiConnectorSettingsController($this->container))->save();
     }
 
     public function testDeleteThrowsForNonAdmin(): void
     {
         $this->stubNonAdmin();
         $this->expectException(AccessForbiddenException::class);
-        (new SettingsController($this->container))->delete();
+        (new AiConnectorSettingsController($this->container))->delete();
     }
 
     public function testSetDefaultThrowsForNonAdmin(): void
     {
         $this->stubNonAdmin();
         $this->expectException(AccessForbiddenException::class);
-        (new SettingsController($this->container))->setDefault();
+        (new AiConnectorSettingsController($this->container))->setDefault();
     }
 
     public function testSaveCreatesFirstProfileAsDefaultWithKey(): void
@@ -245,7 +245,7 @@ class SettingsTest extends Base
         ], false);
 
         $this->expectException(AccessForbiddenException::class);
-        (new SettingsController($this->container))->save();
+        (new AiConnectorSettingsController($this->container))->save();
     }
 
     public function testTestConnectionNonAdminReturnsError(): void
@@ -253,7 +253,7 @@ class SettingsTest extends Base
         // Non-admin path returns a JSON error (ok=false) rather than throwing
         // AccessForbiddenException; the endpoint is also GET-CSRF gated. We assert
         // the source guards to keep the behavior verifiable without HTTP.
-        $src = file_get_contents(dirname(__DIR__) . '/Controller/SettingsController.php');
+        $src = file_get_contents(dirname(__DIR__) . '/Controller/AiConnectorSettingsController.php');
         $this->assertStringContainsString('checkReusableGETCSRFParam', $src,
             'testConnection() must validate the reusable CSRF token from the GET param');
         $this->assertStringContainsString('isAdmin', $src);
@@ -261,7 +261,7 @@ class SettingsTest extends Base
 
     public function testTestConnectionResponseNeverIncludesRawResult(): void
     {
-        $src = file_get_contents(dirname(__DIR__) . '/Controller/SettingsController.php');
+        $src = file_get_contents(dirname(__DIR__) . '/Controller/AiConnectorSettingsController.php');
         $this->assertStringNotContainsString("'result' =>", $src,
             'testConnection() must not echo the raw model output');
     }
@@ -269,7 +269,7 @@ class SettingsTest extends Base
     public function testSettingsTemplatePassesCsrfTokenToTestConnection(): void
     {
         $template   = file_get_contents(dirname(__DIR__) . '/Template/config/settings.php');
-        $controller = file_get_contents(dirname(__DIR__) . '/Controller/SettingsController.php');
+        $controller = file_get_contents(dirname(__DIR__) . '/Controller/AiConnectorSettingsController.php');
         $this->assertStringContainsString('csrf_token', $template);
         $this->assertStringContainsString('$ai_test_csrf', $template);
         $this->assertStringNotContainsString('$this->token', $template);

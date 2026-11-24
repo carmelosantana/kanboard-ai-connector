@@ -26,7 +26,7 @@
                     <strong><?= t('Default') ?></strong>
                 <?php else: ?>
                     <form method="post" style="display:inline"
-                          action="<?= $this->url->href('SettingsController', 'setDefault', ['plugin' => 'AiConnector']) ?>">
+                          action="<?= $this->url->href('AiConnectorSettingsController', 'setDefault', ['plugin' => 'AiConnector']) ?>">
                         <?= $this->form->csrf() ?>
                         <input type="hidden" name="profile_id" value="<?= $this->text->e($p['id']) ?>">
                         <button type="submit" class="btn btn-grey"><?= t('Make default') ?></button>
@@ -37,10 +37,10 @@
             <td><?= $this->text->e($providers[$p['provider']] ?? $p['provider']) ?></td>
             <td><?= $this->text->e($p['model']) ?></td>
             <td>
-                <?= $this->url->link(t('Edit'), 'SettingsController', 'show', ['plugin' => 'AiConnector', 'edit' => $p['id']]) ?>
+                <?= $this->url->link(t('Edit'), 'AiConnectorSettingsController', 'show', ['plugin' => 'AiConnector', 'edit' => $p['id']]) ?>
                 &nbsp;
                 <form method="post" style="display:inline"
-                      action="<?= $this->url->href('SettingsController', 'delete', ['plugin' => 'AiConnector']) ?>">
+                      action="<?= $this->url->href('AiConnectorSettingsController', 'delete', ['plugin' => 'AiConnector']) ?>">
                     <?= $this->form->csrf() ?>
                     <input type="hidden" name="profile_id" value="<?= $this->text->e($p['id']) ?>">
                     <button type="submit" class="btn btn-red"><?= t('Remove') ?></button>
@@ -60,7 +60,7 @@
 <h3><?= $edit_profile ? t('Edit Profile') : t('Add Profile') ?></h3>
 
 <form method="post"
-      action="<?= $this->url->href('SettingsController', 'save', ['plugin' => 'AiConnector']) ?>">
+      action="<?= $this->url->href('AiConnectorSettingsController', 'save', ['plugin' => 'AiConnector']) ?>">
     <?= $this->form->csrf() ?>
     <input type="hidden" name="profile_id" value="<?= $this->text->e($edit_profile['id'] ?? '') ?>">
 
@@ -107,7 +107,7 @@
     <div class="form-actions">
         <button type="submit" class="btn btn-blue"><?= $edit_profile ? t('Save Profile') : t('Add Profile') ?></button>
         <?php if ($edit_profile): ?>
-            <?= $this->url->link(t('Cancel'), 'SettingsController', 'show', ['plugin' => 'AiConnector']) ?>
+            <?= $this->url->link(t('Cancel'), 'AiConnectorSettingsController', 'show', ['plugin' => 'AiConnector']) ?>
         <?php endif ?>
     </div>
 </form>
@@ -119,7 +119,7 @@
 </p>
 
 <form method="post"
-      action="<?= $this->url->href('SettingsController', 'saveSecurity', ['plugin' => 'AiConnector']) ?>">
+      action="<?= $this->url->href('AiConnectorSettingsController', 'saveSecurity', ['plugin' => 'AiConnector']) ?>">
     <?= $this->form->csrf() ?>
 
     <?= $this->form->label(t('Allowed hosts'), 'allowed_hosts') ?>
@@ -157,7 +157,7 @@
     <?php endforeach ?>
 </select>
 <button type="button" class="btn btn-blue" id="ai-test-btn"
-        data-test-url="<?= $this->url->href('SettingsController', 'testConnection', ['plugin' => 'AiConnector', 'csrf_token' => $ai_test_csrf]) ?>"
+        data-test-url="<?= $this->url->href('AiConnectorSettingsController', 'testConnection', ['plugin' => 'AiConnector', 'csrf_token' => $ai_test_csrf]) ?>"
         data-msg-ok="<?= $this->text->e(t('Connection successful.')) ?>"
         data-msg-fail="<?= $this->text->e(t('Connection failed:')) ?>"
         data-msg-unknown="<?= $this->text->e(t('Unknown error')) ?>"

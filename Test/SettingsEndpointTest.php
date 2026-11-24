@@ -2,7 +2,7 @@
 
 require_once 'tests/units/Base.php';
 
-use Kanboard\Plugin\AiConnector\Controller\SettingsController;
+use Kanboard\Plugin\AiConnector\Controller\AiConnectorSettingsController;
 use Kanboard\Plugin\AiConnector\Model\ProviderRegistry;
 use Kanboard\Plugin\AiConnector\Model\UrlGuard;
 use KanboardTests\units\Base;
@@ -90,7 +90,7 @@ class SettingsEndpointTest extends Base
     private function save(array $values): void
     {
         $this->stubAdmin($values + ['profile_id' => 'p1', 'label' => 'P', 'model' => 'm', 'api_key' => '']);
-        (new SettingsController($this->container))->save();
+        (new AiConnectorSettingsController($this->container))->save();
     }
 
     private function storedKey(): string
@@ -249,7 +249,7 @@ class SettingsEndpointTest extends Base
     private function saveSecurity(array $values): void
     {
         $this->stubAdmin($values);
-        (new SettingsController($this->container))->saveSecurity();
+        (new AiConnectorSettingsController($this->container))->saveSecurity();
     }
 
     private function config(string $key): string
@@ -289,7 +289,7 @@ class SettingsEndpointTest extends Base
     public function testTestConnectionReturnsAGenericError(): void
     {
         $this->stubAdmin([], ['profile' => 'no-such-profile-xyz', 'csrf_token' => 't']);
-        (new SettingsController($this->container))->testConnection();
+        (new AiConnectorSettingsController($this->container))->testConnection();
 
         $this->assertFalse($this->json['ok']);
         $this->assertStringNotContainsString('no-such-profile-xyz', $this->json['error']);
@@ -300,7 +300,7 @@ class SettingsEndpointTest extends Base
     {
         $this->seedProfile('openai', 'http://evil.example/v1', 'super-secret-key');
         $this->stubAdmin([], ['profile' => 'p1', 'csrf_token' => 't']);
-        (new SettingsController($this->container))->testConnection();
+        (new AiConnectorSettingsController($this->container))->testConnection();
 
         $this->assertFalse($this->json['ok']);
         $this->assertStringContainsString('always blocked', $this->json['error']);

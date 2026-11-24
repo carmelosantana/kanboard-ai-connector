@@ -17,7 +17,7 @@ use Kanboard\Plugin\AiConnector\Model\UrlGuard;
  * @package Kanboard\Plugin\AiConnector\Controller
  * @author  Carmelo Santana
  */
-class SettingsController extends BaseController
+class AiConnectorSettingsController extends BaseController
 {
     public function show(): void
     {
@@ -281,6 +281,6 @@ class SettingsController extends BaseController
 
     private function redirectToShow(): void
     {
-        $this->response->redirect($this->helper->url->to('SettingsController', 'show', ['plugin' => 'AiConnector']));
+        $this->response->redirect($this->helper->url->to('AiConnectorSettingsController', 'show', ['plugin' => 'AiConnector']));
     }
 }
