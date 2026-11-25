@@ -3,6 +3,7 @@
 namespace Kanboard\Plugin\AiConnector;
 
 use Kanboard\Core\Plugin\Base;
+use Kanboard\Core\Security\Role;
 
 /**
  * AiConnector — universal multi-provider AI backend for the Kanboard suite.
@@ -45,6 +46,8 @@ class Plugin extends Base
         $this->route->addRoute('ai-connector/delete',   'AiConnectorSettingsController', 'delete');
         $this->route->addRoute('ai-connector/default',  'AiConnectorSettingsController', 'setDefault');
         $this->route->addRoute('ai-connector/test',     'AiConnectorSettingsController', 'testConnection');
+        // Its own rule: the old shared name SettingsController took core's admin rule; this one would fall to the app-user default (#7337).
+        $this->applicationAccessMap->add('AiConnectorSettingsController', '*', Role::APP_ADMIN);
     }
 
     public function getPluginName(): string

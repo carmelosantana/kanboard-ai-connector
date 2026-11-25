@@ -2,10 +2,11 @@
 
 All notable changes to AiConnector will be documented here.
 
-## 1.2.1 - 2026-11-24
+## 1.2.1 - 2026-11-25
 
 ### Changed
 - The settings controller is now `AiConnectorSettingsController`. Kanboard keys access rules by short controller name, so another plugin's rule for a `SettingsController` would have governed AI Connector's settings too. Links that name `SettingsController` with `plugin=AiConnector` must use the new name.
+- The renamed controller registers its own admin-only access rule; every settings action stays admins-only at the access-map level, not only inside each action.
 
 ## 1.2.0 - 2026-11-19
 
