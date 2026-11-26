@@ -96,6 +96,23 @@ checked when saved and again before every request, after DNS resolution:
 
 Anthropic, Grok, Gemini and Mistral call fixed vendor hosts and ignore the base URL.
 
+## AI limits
+
+**Settings → AI Connector → AI Limits** caps what anyone can spend through the
+plugins that use AI Connector:
+
+- **AI requests per person per hour** (default 30) — one quota shared by all of a
+  person's AI features, over a sliding hour.
+- **Longest AI request (characters)** (default 32,000) — the text a plugin sends,
+  system prompt included.
+
+Neither limit can be switched off. A request past either limit is refused before
+it reaches the provider, and the person sees why. A person's requests are checked and
+counted one at a time, so parallel requests cannot overshoot the quota.
+
+Plugins that ask for AI Connector 1.3.0 or later use these limits, and keep their
+AI features off with an older AI Connector.
+
 ## Test Connection
 
 Each profile row on the Settings page has a **Test Connection** button
@@ -169,6 +186,30 @@ $result = $registry->structured(
 
 // $result is a decoded PHP array — use it directly.
 ```
+
+## The `AiQuota` API (v1.3.0+)
+
+Call it before every provider request, with the signed-in user's id, a feature
+name and the text you will send. `null` means go ahead (the request is counted);
+a string is the refusal to show the user.
+
+```php
+use Kanboard\Plugin\AiConnector\Model\AiQuota;
+
+$refusal = (new AiQuota($this->container))->consume(
+    $this->userSession->getId(),
+    'myplugin.summarize',                       // shown in the log on refusal
+    array_column($messages, 'content'),         // string or list of strings
+);
+if ($refusal !== null) {
+    $this->response->json(['error' => $refusal], 429);
+    return;
+}
+```
+
+Feature-detect it (`class_exists(AiQuota::class)`) and keep AI off when it is
+missing, so an older AI Connector does not leave your feature unmetered.
+`maxInputChars()` gives the cap, for trimming optional context to fit.
 
 ## ModelCatalog API (v1.1.0+)
 
