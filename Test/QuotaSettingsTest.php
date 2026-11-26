@@ -80,4 +80,10 @@ class QuotaSettingsTest extends Base
         $this->assertStringContainsString("'saveLimits'", $template);
         $this->assertStringContainsString('AiQuota::FIELDS', $template);
     }
+
+    public function testTheFormCarriesTheCeilings(): void
+    {
+        $template = file_get_contents(dirname(__DIR__).'/Template/config/settings.php');
+        $this->assertStringContainsString('AiQuota::CEILINGS[$key]', $template);
+    }
 }

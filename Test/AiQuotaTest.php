@@ -165,13 +165,40 @@ class AiQuotaTest extends Base
         $this->assertFalse($pdo->inTransaction());
     }
 
-    public function testACallersOpenTransactionIsNeitherCommittedNorRolledBack(): void
+    public function testInsideACallersTransactionItFailsClosed(): void
     {
+        // A caller's rollback would erase the count after the provider was paid: refuse to run there.
         $db = $this->container['db'];
         $db->startTransaction();
-        $this->assertNull($this->quota()->consume($this->ana, 'f', 'x'));
-        $this->assertTrue($db->getConnection()->inTransaction(), 'still the caller\'s transaction');
-        $db->cancelTransaction();
-        $this->assertSame(0, $db->table(AiQuota::TABLE)->count(), 'the count went with the caller\'s rollback');
+        try {
+            $this->quota()->consume($this->ana, 'f', 'x');
+            $this->fail('expected a LogicException');
+        } catch (\LogicException $e) {
+            $this->assertTrue($db->getConnection()->inTransaction(), 'the caller\'s transaction is left alone');
+        } finally {
+            $db->cancelTransaction();
+        }
+        $this->assertSame(0, $db->table(AiQuota::TABLE)->count());
+    }
+
+    public function testAnUnknownUserIdIsRefusedAndNothingIsCounted(): void
+    {
+        $this->assertIsString($this->quota()->consume(987654, 'f', 'x'));
+        $db = $this->container['db'];
+        $this->assertSame(0, $db->table(AiQuota::TABLE)->count());
+        $this->assertSame(0, $db->table(AiQuota::LOCK_TABLE)->count());
+    }
+
+    public function testBothLimitsHaveACeiling(): void
+    {
+        $quota = $this->quota();
+        $this->assertSame([], $quota->save([AiQuota::REQUESTS_PER_HOUR => '10000', AiQuota::MAX_INPUT_CHARS => '1000000']));
+        $this->assertArrayHasKey(AiQuota::REQUESTS_PER_HOUR, $quota->save([AiQuota::REQUESTS_PER_HOUR => '10001', AiQuota::MAX_INPUT_CHARS => '5000']));
+        $this->assertArrayHasKey(AiQuota::MAX_INPUT_CHARS, $quota->save([AiQuota::REQUESTS_PER_HOUR => '5', AiQuota::MAX_INPUT_CHARS => '1000001']));
+
+        // A stored value above the ceiling (set before 1.3.0's checks, or by hand) reads as the default.
+        $this->setting(AiQuota::REQUESTS_PER_HOUR, '999999999');
+        $this->setting(AiQuota::MAX_INPUT_CHARS, '999999999');
+        $this->assertSame([AiQuota::REQUESTS_PER_HOUR => 30, AiQuota::MAX_INPUT_CHARS => 32000], $this->quota()->values());
     }
 }

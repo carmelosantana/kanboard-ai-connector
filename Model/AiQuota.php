@@ -12,11 +12,15 @@ namespace Kanboard\Plugin\AiConnector\Model;
  * consume() refuses input longer than the input cap, and requests past the per-user hourly
  * quota (one quota shared by every feature, over a sliding hour). A request it lets through
  * is counted at once, so a provider error still costs one request. The check and the count
- * run in one transaction that first updates the user's row in aiconnector_quota_users: a row
- * lock on MySQL/MariaDB and Postgres, the write lock on SQLite. A user's parallel requests
- * therefore queue there, and each counts what the ones before it committed. Both limits are admin settings in `settings`; a stored
- * value that is missing or not a whole number of 1 or more reads as the default, so neither
- * limit can be switched off.
+ * run in their own transaction, which first updates the user's row in aiconnector_quota_users:
+ * a row lock on MySQL/MariaDB and Postgres, the write lock on SQLite. A user's parallel
+ * requests therefore queue there, and each counts what the ones before it committed. Inside
+ * a caller's transaction consume() throws instead, since a rollback would erase the count.
+ * An unknown user id is refused, and so is a request whose count could not be stored.
+ *
+ * Both limits are admin settings in `settings`; a stored value that is missing, not a whole
+ * number of 1 or more, or above its ceiling reads as the default, so neither limit can be
+ * switched off.
  *
  * Consumers feature-detect this class (class_exists) and keep AI off when it is missing.
  */
@@ -37,6 +41,12 @@ final class AiQuota
     private const DEFAULTS = [
         self::REQUESTS_PER_HOUR => 30,
         self::MAX_INPUT_CHARS => 32000,
+    ];
+
+    /** The highest value each limit accepts, so neither can be set high enough to mean "off". */
+    public const CEILINGS = [
+        self::REQUESTS_PER_HOUR => 10000,
+        self::MAX_INPUT_CHARS => 1000000,
     ];
 
     /** @var callable(): int */
@@ -69,20 +79,26 @@ final class AiQuota
             return t('This AI request is too long: %d characters, and the limit is %d. Shorten it and try again.', $length, $cap);
         }
 
-        $now = ($this->clock)();
         $db = $this->container['db'];
+        if ($db->getConnection()->inTransaction()) {
+            // A caller's rollback would erase the count after the provider was paid.
+            throw new \LogicException('AiQuota::consume() must not run inside a database transaction.');
+        }
+
+        $now = ($this->clock)();
         // Pruning stays outside the transaction: a range delete there would lock other users' rows.
         $db->table(self::TABLE)->lte('created_at', $now - self::WINDOW_SECONDS)->remove();
         if (! $db->table(self::LOCK_TABLE)->eq('user_id', $userId)->exists()) {
             // Two first requests can race here; the loser's insert fails as a duplicate, which is fine.
             $db->table(self::LOCK_TABLE)->insert(['user_id' => $userId, 'locked_at' => $now]);
+            if (! $db->table(self::LOCK_TABLE)->eq('user_id', $userId)->exists()) {
+                // No such user (the foreign key refused the row): nothing to count against, so refuse.
+                $this->log($userId, $feature, 'unknown user');
+                return t('Sign in to use AI features.');
+            }
         }
 
-        // Inside a caller's transaction the lock is held until the caller ends it; never end theirs.
-        $own = ! $db->getConnection()->inTransaction();
-        if ($own) {
-            $db->startTransaction();
-        }
+        $db->startTransaction();
         try {
             $db->table(self::LOCK_TABLE)->eq('user_id', $userId)->update(['locked_at' => $now]);
 
@@ -90,26 +106,26 @@ final class AiQuota
             if ($this->usedThisHour($userId) >= $perHour) {
                 $oldest = (int) $db->table(self::TABLE)->eq('user_id', $userId)->gt('created_at', $now - self::WINDOW_SECONDS)
                     ->asc('created_at')->findOneColumn('created_at');
-                if ($own) {
-                    $db->cancelTransaction();
-                }
+                $db->cancelTransaction();
                 $minutes = max(1, (int) ceil(($oldest + self::WINDOW_SECONDS - $now) / 60));
                 $this->log($userId, $feature, 'hourly quota reached');
                 return t('You have reached the AI limit of %d requests per hour. Try again in %d minutes.', $perHour, $minutes);
             }
 
-            $db->table(self::TABLE)->insert([
+            $counted = $db->table(self::TABLE)->insert([
                 'user_id' => $userId,
                 'feature' => mb_substr($feature, 0, 64, 'UTF-8'),
                 'created_at' => $now,
             ]);
-            if ($own) {
-                $db->closeTransaction();
-            }
-        } catch (\Throwable $e) {
-            if ($own) {
+            if (! $counted) {
+                // Never let a request through that was not counted.
                 $db->cancelTransaction();
+                $this->log($userId, $feature, 'count not stored');
+                return t('AI is unavailable right now. Try again later.');
             }
+            $db->closeTransaction();
+        } catch (\Throwable $e) {
+            $db->cancelTransaction();
             throw $e;
         }
         return null;
@@ -156,8 +172,8 @@ final class AiQuota
         foreach (self::FIELDS as $key => $label) {
             $value = $posted[$key] ?? null;
             $value = is_string($value) ? trim($value) : '';
-            if (! ctype_digit($value) || (int) $value < 1 || strlen(ltrim($value, '0')) > 9) {
-                $errors[$key] = t('%s must be a whole number of 1 or more.', t($label));
+            if (! ctype_digit($value) || (int) $value < 1 || strlen(ltrim($value, '0')) > 9 || (int) $value > self::CEILINGS[$key]) {
+                $errors[$key] = t('%s must be a whole number from 1 to %d.', t($label), self::CEILINGS[$key]);
                 continue;
             }
             $values[$key] = (string) (int) $value;
@@ -171,7 +187,8 @@ final class AiQuota
     private function int(string $key): int
     {
         $value = trim((string) $this->container['configModel']->get($key, ''));
-        return ctype_digit($value) && (int) $value > 0 && strlen(ltrim($value, '0')) <= 9 ? (int) $value : self::DEFAULTS[$key];
+        return ctype_digit($value) && (int) $value > 0 && strlen(ltrim($value, '0')) <= 9 && (int) $value <= self::CEILINGS[$key]
+            ? (int) $value : self::DEFAULTS[$key];
     }
 
     private function log(int $userId, string $feature, string $reason): void

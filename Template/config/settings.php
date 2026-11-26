@@ -153,7 +153,7 @@
     <?= $this->form->csrf() ?>
     <?php foreach (\Kanboard\Plugin\AiConnector\Model\AiQuota::FIELDS as $key => $label): ?>
         <?= $this->form->label(t($label), $key) ?>
-        <input type="number" min="1" step="1" required name="<?= $this->text->e($key) ?>" id="form-<?= $this->text->e($key) ?>"
+        <input type="number" min="1" max="<?= \Kanboard\Plugin\AiConnector\Model\AiQuota::CEILINGS[$key] ?>" step="1" required name="<?= $this->text->e($key) ?>" id="form-<?= $this->text->e($key) ?>"
                class="form-number" value="<?= (int) $ai_limits[$key] ?>">
     <?php endforeach ?>
     <div class="form-actions">
