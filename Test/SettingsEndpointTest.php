@@ -20,6 +20,10 @@ class SettingsEndpointTest extends Base
     protected function setUp(): void
     {
         parent::setUp();
+        $driver = ['sqlite' => 'Sqlite', 'mysql' => 'Mysql', 'postgres' => 'Postgres'][DB_DRIVER];
+        require_once __DIR__."/../Schema/$driver.php";
+        \Kanboard\Plugin\AiConnector\Schema\version_1($this->container['db']->getConnection());
+        \Kanboard\Plugin\AiConnector\Schema\version_2($this->container['db']->getConnection());
         UrlGuard::setResolverForTesting(fn (string $host): array => match ($host) {
             'api.openai.com', 'other.example.com' => ['93.184.216.34'],
             'localhost'    => ['127.0.0.1'],
@@ -305,5 +309,18 @@ class SettingsEndpointTest extends Base
         $this->assertFalse($this->json['ok']);
         $this->assertStringContainsString('always blocked', $this->json['error']);
         $this->assertStringNotContainsString('super-secret-key', $this->json['error']);
+    }
+
+    public function testTestConnectionCountsAgainstTheAdminsQuota(): void
+    {
+        $this->seedProfile('openai', 'http://evil.example/v1', 'super-secret-key');
+        $this->seed(\Kanboard\Plugin\AiConnector\Model\AiQuota::REQUESTS_PER_HOUR, '1');
+        $this->container['db']->table(\Kanboard\Plugin\AiConnector\Model\AiQuota::TABLE)
+            ->insert(['user_id' => 1, 'feature' => 'seed', 'created_at' => time()]);
+        $this->stubAdmin([], ['profile' => 'p1', 'csrf_token' => 't']);
+        (new AiConnectorSettingsController($this->container))->testConnection();
+
+        $this->assertFalse($this->json['ok']);
+        $this->assertStringContainsString('AI limit', $this->json['error']);
     }
 }

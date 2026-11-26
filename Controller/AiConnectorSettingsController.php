@@ -267,6 +267,7 @@ class AiConnectorSettingsController extends BaseController
         $this->checkReusableGETCSRFParam();
 
         $profileId = $this->request->getStringParam('profile', '');
+        $prompt = 'Reply with ok=true to confirm the connection works.';
 
         try {
             $registry = new ProviderRegistry($this->container);
@@ -278,8 +279,14 @@ class AiConnectorSettingsController extends BaseController
                     'required'   => ['ok'],
                 ],
             ]);
+            // A test is a real provider request: it counts against the admin's own AI limits.
+            $refusal = (new AiQuota($this->container))->consume((int) $this->userSession->getId(), 'aiconnector.test_connection', [$prompt, $schema]);
+            if ($refusal !== null) {
+                $this->response->json(['ok' => false, 'error' => $refusal]);
+                return;
+            }
             $registry->structured(
-                [['role' => 'user', 'content' => 'Reply with ok=true to confirm the connection works.']],
+                [['role' => 'user', 'content' => $prompt]],
                 $schema,
                 $profileId !== '' ? $profileId : null
             );
