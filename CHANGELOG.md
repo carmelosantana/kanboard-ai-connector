@@ -5,8 +5,9 @@ All notable changes to AiConnector will be documented here.
 ## 1.3.0 — 2026-11-25
 
 ### Added
-- AI limits, shared by every plugin that uses AI through AI Connector: a per-person hourly request quota (default 30) and a longest-request cap in characters (default 32,000). Admins set both on **Settings → AI Connector → AI Limits**. Neither can be switched off; a stored value that is not a whole number of 1 or more reads as the default.
-- `AiQuota`, the PHP API behind the limits: consuming plugins call `consume($userId, $feature, $input)` before each provider request and show the refusal it returns. Requests it lets through are kept for an hour in a new `aiconnector_requests` table, and each check-and-count runs under a per-user row lock (`aiconnector_quota_users`), so a person's parallel requests cannot overshoot the quota.
+- AI limits, shared by every plugin that uses AI through AI Connector: a per-person hourly request quota (default 30) and a longest-request cap in characters (default 32,000). Admins set both on **Settings → AI Connector → AI Limits**, up to 10,000 requests an hour and 1,000,000 characters. Neither can be switched off; a stored value that is not a whole number in that range reads as the default.
+- `AiQuota`, the PHP API behind the limits: consuming plugins call `consume($userId, $feature, $input)` before each provider request and show the refusal it returns. Requests it lets through are kept for an hour in a new `aiconnector_requests` table, and each check-and-count runs under a per-user row lock (`aiconnector_quota_users`), so a person's parallel requests cannot overshoot the quota. It refuses unknown users and any request it could not count, and throws if called inside a database transaction.
+- Test Connection counts against the admin's own hourly limit.
 
 ## 1.2.1 - 2026-11-25
 

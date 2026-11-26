@@ -104,9 +104,13 @@ plugins that use AI Connector:
 - **AI requests per person per hour** (default 30) — one quota shared by all of a
   person's AI features, over a sliding hour.
 - **Longest AI request (characters)** (default 32,000) — the text a plugin sends,
-  system prompt included.
+  system prompt and response schema included.
 
-Neither limit can be switched off. A request past either limit is refused before
+![The AI Limits section of the AI Connector settings](https://raw.githubusercontent.com/carmelosantana/kanboard-ai-connector/main/docs/screenshots/ai-limits.webp)
+
+Neither limit can be switched off: the hourly limit goes up to 10,000 and the
+length cap up to 1,000,000 characters. Test Connection counts against the
+admin's own hourly limit. A request past either limit is refused before
 it reaches the provider, and the person sees why. A person's requests are checked and
 counted one at a time, so parallel requests cannot overshoot the quota.
 
@@ -207,7 +211,8 @@ if ($refusal !== null) {
 }
 ```
 
-Feature-detect it (`class_exists(AiQuota::class)`) and keep AI off when it is
+Call it outside any database transaction (it throws inside one, since a rollback
+would erase the count). Feature-detect it (`class_exists(AiQuota::class)`) and keep AI off when it is
 missing, so an older AI Connector does not leave your feature unmetered.
 `maxInputChars()` gives the cap, for trimming optional context to fit.
 
