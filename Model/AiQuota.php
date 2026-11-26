@@ -12,8 +12,9 @@ namespace Kanboard\Plugin\AiConnector\Model;
  * consume() refuses input longer than the input cap, and requests past the per-user hourly
  * quota (one quota shared by every feature, over a sliding hour). A request it lets through
  * is counted at once, so a provider error still costs one request. The check and the count
- * are not one transaction: two requests from the same user at the same instant can both pass,
- * so the quota is soft by that much. Both limits are admin settings in `settings`; a stored
+ * run in one transaction that first updates the user's row in aiconnector_quota_users: a row
+ * lock on MySQL/MariaDB and Postgres, the write lock on SQLite. A user's parallel requests
+ * therefore queue there, and each counts what the ones before it committed. Both limits are admin settings in `settings`; a stored
  * value that is missing or not a whole number of 1 or more reads as the default, so neither
  * limit can be switched off.
  *
@@ -22,6 +23,7 @@ namespace Kanboard\Plugin\AiConnector\Model;
 final class AiQuota
 {
     public const TABLE = 'aiconnector_requests';
+    public const LOCK_TABLE = 'aiconnector_quota_users';
     public const REQUESTS_PER_HOUR = 'aiconnector_requests_per_hour';
     public const MAX_INPUT_CHARS = 'aiconnector_max_input_chars';
     public const WINDOW_SECONDS = 3600;
@@ -69,22 +71,47 @@ final class AiQuota
 
         $now = ($this->clock)();
         $db = $this->container['db'];
+        // Pruning stays outside the transaction: a range delete there would lock other users' rows.
         $db->table(self::TABLE)->lte('created_at', $now - self::WINDOW_SECONDS)->remove();
-
-        $perHour = $this->requestsPerHour();
-        if ($this->usedThisHour($userId) >= $perHour) {
-            $oldest = (int) $db->table(self::TABLE)->eq('user_id', $userId)->gt('created_at', $now - self::WINDOW_SECONDS)
-                ->asc('created_at')->findOneColumn('created_at');
-            $minutes = max(1, (int) ceil(($oldest + self::WINDOW_SECONDS - $now) / 60));
-            $this->log($userId, $feature, 'hourly quota reached');
-            return t('You have reached the AI limit of %d requests per hour. Try again in %d minutes.', $perHour, $minutes);
+        if (! $db->table(self::LOCK_TABLE)->eq('user_id', $userId)->exists()) {
+            // Two first requests can race here; the loser's insert fails as a duplicate, which is fine.
+            $db->table(self::LOCK_TABLE)->insert(['user_id' => $userId, 'locked_at' => $now]);
         }
 
-        $db->table(self::TABLE)->insert([
-            'user_id' => $userId,
-            'feature' => mb_substr($feature, 0, 64, 'UTF-8'),
-            'created_at' => $now,
-        ]);
+        // Inside a caller's transaction the lock is held until the caller ends it; never end theirs.
+        $own = ! $db->getConnection()->inTransaction();
+        if ($own) {
+            $db->startTransaction();
+        }
+        try {
+            $db->table(self::LOCK_TABLE)->eq('user_id', $userId)->update(['locked_at' => $now]);
+
+            $perHour = $this->requestsPerHour();
+            if ($this->usedThisHour($userId) >= $perHour) {
+                $oldest = (int) $db->table(self::TABLE)->eq('user_id', $userId)->gt('created_at', $now - self::WINDOW_SECONDS)
+                    ->asc('created_at')->findOneColumn('created_at');
+                if ($own) {
+                    $db->cancelTransaction();
+                }
+                $minutes = max(1, (int) ceil(($oldest + self::WINDOW_SECONDS - $now) / 60));
+                $this->log($userId, $feature, 'hourly quota reached');
+                return t('You have reached the AI limit of %d requests per hour. Try again in %d minutes.', $perHour, $minutes);
+            }
+
+            $db->table(self::TABLE)->insert([
+                'user_id' => $userId,
+                'feature' => mb_substr($feature, 0, 64, 'UTF-8'),
+                'created_at' => $now,
+            ]);
+            if ($own) {
+                $db->closeTransaction();
+            }
+        } catch (\Throwable $e) {
+            if ($own) {
+                $db->cancelTransaction();
+            }
+            throw $e;
+        }
         return null;
     }
 

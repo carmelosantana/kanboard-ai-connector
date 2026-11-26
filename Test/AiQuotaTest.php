@@ -21,6 +21,7 @@ class AiQuotaTest extends Base
         $driver = ['sqlite' => 'Sqlite', 'mysql' => 'Mysql', 'postgres' => 'Postgres'][DB_DRIVER];
         require_once __DIR__."/../Schema/$driver.php";
         \Kanboard\Plugin\AiConnector\Schema\version_1($this->container['db']->getConnection());
+        \Kanboard\Plugin\AiConnector\Schema\version_2($this->container['db']->getConnection());
         $this->ana = (int) $this->container['userModel']->create(['username' => 'ana']);
         $this->bob = (int) $this->container['userModel']->create(['username' => 'bob']);
     }
@@ -140,5 +141,37 @@ class AiQuotaTest extends Base
         $this->assertArrayHasKey(AiQuota::MAX_INPUT_CHARS, $errors);
         $errors = $this->quota()->save([AiQuota::REQUESTS_PER_HOUR => '5']);
         $this->assertArrayHasKey(AiQuota::MAX_INPUT_CHARS, $errors);
+    }
+
+    public function testEachUserGetsOneLockRowThatSerialisesTheirChecks(): void
+    {
+        $quota = $this->quota();
+        $quota->consume($this->ana, 'f', 'x');
+        $quota->consume($this->ana, 'f', 'x');
+        $quota->consume($this->bob, 'f', 'x');
+        $db = $this->container['db'];
+        $this->assertSame(1, $db->table(AiQuota::LOCK_TABLE)->eq('user_id', $this->ana)->count());
+        $this->assertSame(1, $db->table(AiQuota::LOCK_TABLE)->eq('user_id', $this->bob)->count());
+    }
+
+    public function testNoTransactionIsLeftOpenWhetherAllowedOrRefused(): void
+    {
+        $this->setting(AiQuota::REQUESTS_PER_HOUR, '1');
+        $pdo = $this->container['db']->getConnection();
+        $quota = $this->quota();
+        $this->assertNull($quota->consume($this->ana, 'f', 'x'));
+        $this->assertFalse($pdo->inTransaction());
+        $this->assertNotNull($quota->consume($this->ana, 'f', 'x'));
+        $this->assertFalse($pdo->inTransaction());
+    }
+
+    public function testACallersOpenTransactionIsNeitherCommittedNorRolledBack(): void
+    {
+        $db = $this->container['db'];
+        $db->startTransaction();
+        $this->assertNull($this->quota()->consume($this->ana, 'f', 'x'));
+        $this->assertTrue($db->getConnection()->inTransaction(), 'still the caller\'s transaction');
+        $db->cancelTransaction();
+        $this->assertSame(0, $db->table(AiQuota::TABLE)->count(), 'the count went with the caller\'s rollback');
     }
 }
