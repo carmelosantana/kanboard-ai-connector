@@ -43,6 +43,7 @@ class Plugin extends Base
         $this->route->addRoute('ai-connector/settings', 'AiConnectorSettingsController', 'show');
         $this->route->addRoute('ai-connector/save',     'AiConnectorSettingsController', 'save');
         $this->route->addRoute('ai-connector/security', 'AiConnectorSettingsController', 'saveSecurity');
+        $this->route->addRoute('ai-connector/limits',   'AiConnectorSettingsController', 'saveLimits');
         $this->route->addRoute('ai-connector/delete',   'AiConnectorSettingsController', 'delete');
         $this->route->addRoute('ai-connector/default',  'AiConnectorSettingsController', 'setDefault');
         $this->route->addRoute('ai-connector/test',     'AiConnectorSettingsController', 'testConnection');

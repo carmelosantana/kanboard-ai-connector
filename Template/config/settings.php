@@ -143,6 +143,25 @@
 </form>
 
 <hr>
+<h3><?= t('AI Limits') ?></h3>
+<p class="form-help">
+    <?= t('Every plugin that uses AI through AI Connector (Kensho, Subtask Generator, Time Invoice, Time Report and others) checks these before each request, so no one can run up the provider bill. The hourly limit is shared by all of a person\'s AI features.') ?>
+</p>
+
+<form method="post"
+      action="<?= $this->url->href('AiConnectorSettingsController', 'saveLimits', ['plugin' => 'AiConnector']) ?>">
+    <?= $this->form->csrf() ?>
+    <?php foreach (\Kanboard\Plugin\AiConnector\Model\AiQuota::FIELDS as $key => $label): ?>
+        <?= $this->form->label(t($label), $key) ?>
+        <input type="number" min="1" step="1" required name="<?= $this->text->e($key) ?>" id="form-<?= $this->text->e($key) ?>"
+               class="form-number" value="<?= (int) $ai_limits[$key] ?>">
+    <?php endforeach ?>
+    <div class="form-actions">
+        <button type="submit" class="btn btn-blue"><?= t('Save') ?></button>
+    </div>
+</form>
+
+<hr>
 <h3><?= t('Test Connection') ?></h3>
 <p class="form-help"><?= t('Verify a saved profile works. Select a profile and click Test.') ?></p>
 

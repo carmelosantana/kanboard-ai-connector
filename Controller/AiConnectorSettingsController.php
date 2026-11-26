@@ -4,6 +4,7 @@ namespace Kanboard\Plugin\AiConnector\Controller;
 
 use Kanboard\Controller\BaseController;
 use Kanboard\Core\Controller\AccessForbiddenException;
+use Kanboard\Plugin\AiConnector\Model\AiQuota;
 use Kanboard\Plugin\AiConnector\Model\ProviderRegistry;
 use Kanboard\Plugin\AiConnector\Model\UnsafeUrlException;
 use Kanboard\Plugin\AiConnector\Model\UrlGuard;
@@ -42,6 +43,7 @@ class AiConnectorSettingsController extends BaseController
             'ai_test_csrf'   => $this->token->getReusableCSRFToken(),
             'allowed_hosts'  => implode("\n", UrlGuard::parseHostList((string) $this->configModel->get(UrlGuard::ALLOWED_HOSTS_KEY, ''))),
             'allow_private'  => (string) $this->configModel->get(UrlGuard::ALLOW_PRIVATE_KEY, '') === '1',
+            'ai_limits'      => (new AiQuota($this->container))->values(),
         ]));
     }
 
@@ -169,6 +171,29 @@ class AiConnectorSettingsController extends BaseController
         $this->memoryCache->flush();
 
         $this->flash->success(t('Network security settings saved.'));
+        $this->redirectToShow();
+    }
+
+    /** Save the AI limits (AiQuota): every field a whole number of 1 or more, or nothing is saved. */
+    public function saveLimits(): void
+    {
+        if (! $this->userSession->isAdmin()) {
+            throw new AccessForbiddenException();
+        }
+        $this->checkCSRFForm();
+
+        $values = $this->request->getValues();
+        $posted = [];
+        foreach (array_keys(AiQuota::FIELDS) as $key) {
+            $posted[$key] = $values[$key] ?? null;
+        }
+        $errors = (new AiQuota($this->container))->save($posted);
+        if ($errors !== []) {
+            $this->flash->failure(t('AI limits not saved.') . ' ' . implode(' ', $errors));
+        } else {
+            $this->memoryCache->flush();
+            $this->flash->success(t('AI limits saved.'));
+        }
         $this->redirectToShow();
     }
 
