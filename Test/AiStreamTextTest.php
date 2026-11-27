@@ -452,6 +452,81 @@ class AiStreamTextTest extends Base
         $this->assertSame('failed', $this->attemptStatus());
     }
 
+    public function testAiStreamStopsReadingAtTheDeadlineItself(): void
+    {
+        // The transport's max_duration is not relied on: AiStream checks the clock on every
+        // upstream event, ticks included, and stops reading once the deadline has passed.
+        $provider = new ScriptedProvider([
+            fn () => $this->now = 4.9, new Tick(),
+            fn () => $this->now = 5.0, new Tick(),
+            new UpText('too late'), self::finish(),
+        ]);
+        $events = iterator_to_array($this->stream($provider, max: 5.0), false);
+        $this->assertSame(['Started', 'Progress', 'Error'], self::shape($events));
+        $this->assertSame('timeout', $events[2]->code);
+        $this->assertSame('abandoned', $provider->ended, 'AiStream stopped reading');
+        $this->assertSame('failed', $this->attemptStatus());
+        $this->assertCount(1, array_filter($this->logged, fn ($l) => str_contains($l, 'AI stream failed (timeout)')));
+    }
+
+    public function testConsumerTimeBetweenEventsCountsTowardsTheDeadline(): void
+    {
+        $provider = new ScriptedProvider([new UpText('one'), new UpText('two'), self::finish()]);
+        $events = [];
+        foreach ($this->stream($provider) as $event) {
+            $events[] = $event;
+            if ($event instanceof TextDelta) {
+                $this->now = 300.0; // the consumer holds the first delta until the deadline
+            }
+        }
+        // The first delta's Progress is due on resume; the next upstream event is not read on.
+        $this->assertSame(['Started', 'TextDelta', 'Progress', 'Error'], self::shape($events));
+        $this->assertSame('timeout', $events[3]->code);
+        $this->assertSame('abandoned', $provider->ended);
+    }
+
+    public function testEndlessTicksFromAProviderThatIgnoresItsLimitsEndAtTheDeadline(): void
+    {
+        $endless = new class('endless', 'http://scripted.invalid') extends \CarmeloSantana\PHPAgents\Provider\AbstractProvider {
+            public function streamEvents(array $messages, array $tools = [], array $options = []): iterable
+            {
+                return (function () {
+                    while (true) {
+                        yield new Tick();
+                    }
+                })();
+            }
+            public function chat(array $messages, array $tools = [], array $options = []): \CarmeloSantana\PHPAgents\Provider\Response { throw new \LogicException(); }
+            public function structured(array $messages, string $schema, array $options = []): mixed { throw new \LogicException(); }
+            public function models(): array { return []; }
+            public function isAvailable(): bool { return true; }
+            protected function formatTools(array $tools): array { return []; }
+            protected function formatMessages(array $messages): array { return []; }
+            protected function parseResponse(array $data): \CarmeloSantana\PHPAgents\Provider\Response { throw new \LogicException(); }
+        };
+        $registry = new ProviderRegistry($this->container);
+        $registry->setProviderForTesting($endless);
+        $stream = new AiStream($this->container, null, function (): float {
+            return $this->now += 0.5;
+        });
+        $stream->setRegistryForTesting($registry);
+
+        $n = 0;
+        $terminal = null;
+        foreach ($stream->events(new AiRequest('t.one', 'k1', [['role' => 'user', 'content' => 'hello']], maxDuration: 5.0)) as $event) {
+            if ($event instanceof Terminal) {
+                $terminal = $event;
+                break;
+            }
+            if (++$n > 5000) {
+                break;
+            }
+        }
+        $this->assertInstanceOf(Error::class, $terminal, 'the stream ends at the 5 s deadline');
+        $this->assertSame('timeout', $terminal->code);
+        $this->assertLessThan(20, $n);
+    }
+
     public function testBadToolNameOrIdIsDroppedAndLogged(): void
     {
         $badName = 'evil name<script>';

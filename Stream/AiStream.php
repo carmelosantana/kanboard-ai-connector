@@ -139,10 +139,11 @@ class AiStream extends Base
 
     /**
      * Started, the mapped provider events and Progress heartbeats, then exactly one terminal
-     * event (Finish or Error), after which nothing is yielded. The token is checked on every
-     * upstream event, ticks included; a cancel before the provider's Finish stops reading, which
-     * abandons the php-agents generator and so cancels its HTTP request. Reading stops at the
-     * provider's Finish too: a cancel after it changes nothing.
+     * event (Finish or Error), after which nothing is yielded. The token and the deadline are
+     * checked on every upstream event, ticks included; a cancel or the deadline before the
+     * provider's Finish stops reading (Finish(cancelled) or Error(timeout)), which abandons the
+     * php-agents generator and so cancels its HTTP request. Reading stops at the provider's
+     * Finish too: a cancel or the deadline after it changes nothing.
      *
      * A request with a schema takes the structured path (structured()). A provider that is not
      * an AbstractProvider gets one blocking call instead. A streamed
@@ -208,6 +209,11 @@ class AiStream extends Base
                 }
                 if ($request->cancel?->isCancelled()) {
                     $terminal = new Finish('cancelled', $model, null, null);
+                    break;
+                }
+                if ($this->remaining($deadline) <= 0.0) {
+                    // Enforced here, not only by the transport's max_duration.
+                    $terminal = $this->deadlinePassed($request, $userId);
                     break;
                 }
 
