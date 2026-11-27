@@ -1,5 +1,92 @@
 # Upgrading
 
+## Upgrading to 0.21.0
+
+0.21 adds streamed structured output and status-only exceptions for streamed HTTP errors.
+
+### Added
+
+| Addition | What it does |
+|----------|--------------|
+| `Contract\StructuredStreaming` | `structuredEvents($messages, $schema, $options)` streams the request `structured()` sends ([Structured streaming](PROVIDERS.md#structured-streaming), [ADR 0007](adr/0007-structured-streaming.md)) |
+| `Provider\Stream\StructuredDelta` | One fragment of the JSON document, distinct from `TextDelta` |
+| Usage operation `structured_stream` | A `UsageReport` from `structuredEvents()` names this operation |
+
+`OpenAICompatibleProvider` (with `OllamaProvider`, `XAIProvider`, `MistralProvider` and
+`LlamaServerProvider`), `OpenAIResponsesProvider`, `AnthropicProvider` and `GeminiProvider`
+implement `StructuredStreaming`. `CliProvider` does not. `ProviderInterface` is unchanged, so custom
+providers and decorators need no change; a decorator that should stream structured output
+implements `StructuredStreaming` itself.
+
+### Behaviour changes
+
+| Change | Who is affected | What to do |
+|--------|-----------------|------------|
+| A 4xx or 5xx answer to `stream()`, `streamEvents()` or `structuredEvents()` throws `Exception\HttpStatusException` (`ClientHttpStatusException` for 4xx, `ServerHttpStatusException` for 5xx) before any of the body is read; 0.20 threw symfony's `ClientException` or `ServerException`, which downloaded and parsed the body into its message. The new message names the status only (`Provider returned HTTP 429`). It extends `ProviderException`, implements symfony's `ClientExceptionInterface` or `ServerExceptionInterface`, and has `getStatusCode()` and `getResponse()`, whose response stays open. The agent still reads at most 64 KiB for its `API response:` line, then cancels the response | Code that catches a streamed HTTP error and reads its message or response | Catches on the symfony interfaces keep working. Read the body from `getResponse()` with a bound if you need it; a caller that does not want the body calls `getResponse()->cancel()`. `ProviderException` is no longer `final` |
+
+## Upgrading to 0.20.1
+
+### Behaviour changes
+
+| Change | Who is affected | What to do |
+|--------|-----------------|------------|
+| `Mcp\Server` sends a `ToolError`'s message, and its optional code and data, to the client as an `isError` result with `structuredContent` `{code, message, data}`; 0.20.0 sent every `ToolError` as a bare `tool failed`. Any other exception a handler throws is still sent as `tool failed` | Hosts whose tool handlers throw `ToolError` | Keep secrets out of `ToolError` messages and data: they now reach the client ([Hosting the MCP server](mcp-server.md)) |
+
+## Upgrading to 0.20.0
+
+0.20 removes the in-process llama.cpp FFI path that 0.18 deprecated (see
+[ADR 0006](adr/0006-remove-llama-cpp-ffi.md)). Run the model under llama.cpp's `llama-server` and use
+`LlamaServerProvider` ([LlamaServerProvider](PROVIDERS.md#llamaserverprovider)). Applications that
+never used `LlamaCppProvider` or a `llama-cpp` model need no change.
+
+### Added
+
+`Mcp\Server` exposes host-defined tools over stateless HTTP, with no Composer dependencies and no
+imports from the rest of php-agents. See [Hosting the MCP server](mcp-server.md).
+
+### Breaking changes
+
+| Change | Who is affected | What to do |
+|--------|-----------------|------------|
+| `LlamaCppProvider` is removed | Code that constructs it | Start `llama-server -m model.gguf --jinja` and construct `LlamaServerProvider` (below) |
+| Every class under `Runtime\LlamaCpp` is removed: `LlamaCppNativeRuntime`, `LlamaCppNativeHandle`, `LlamaCppNativeApiInterface`, `FfiLlamaCppNativeApi`, `LlamaCppJsonGrammar`, `LlamaCppStructuredOutputValidator` | Code that builds the native runtime or uses its grammar or validator | Use `LlamaServerProvider`: its `structured()` sends a JSON-schema `response_format`, which llama-server turns into a grammar |
+| The `Provider\LlamaCpp` helpers that only `LlamaCppProvider` used are removed: `LlamaCppHistoryFormatter`, `LlamaCppMultimodalContext`, `LlamaCppMultimodalNormalizer`, `LlamaCppProjectorResolver`, `LlamaCppPromptContext`, `LlamaCppStructuredOutputContext`, `LlamaCppStructuredOutputNormalizer`, `LlamaCppTemplateRegistry`, `LlamaCppTemplateResolver`, `LlamaCppToolPromptInjector`, `LlamaCppToolSchemaNormalizer` | Code that used them directly | llama-server applies the model's chat template (`--jinja`) and reads images through its projector (`--mmproj`); build image parts with `UserMessage::withImages()` and an `ImageResolverInterface` ([Image Inputs](PROVIDERS.md#image-inputs)) |
+| `ProviderFactory` makes a `llama-cpp` (`llamacpp`, `llama-server`) model only from a config with a `baseUrl`; without a `baseUrl` it throws an `InvalidArgumentException` that names `LlamaServerProvider`, even when a `LocalModelRuntimeInterface` is injected | Factory users who relied on an injected runtime | Set `baseUrl` on the `llama-cpp` provider config (below). The factory's `$localModelRuntime` parameter stays and is ignored |
+| `scripts/setup-llama-cpp.sh`, `scripts/test-llama-cpp-runtime.sh`, `scripts/benchmark-llama-cpp-runtime.php`, `scripts/benchmark-llama-cpp-cache.php` and `scripts/compare-llama-cpp-vs-ollama.php` are removed, with their `composer` scripts (`setup:llama-cpp`, `test:llama-cpp-runtime`, `benchmark:llama-cpp-runtime`, `benchmark:llama-cpp-cache`, `compare:llama-cpp-vs-ollama`) | Anyone who ran them | Install llama.cpp from its releases or package manager and run `llama-server` |
+| `docs/LOCAL-RUNTIME.md` is removed | Readers of the native runtime guide | See [LlamaServerProvider](PROVIDERS.md#llamaserverprovider) |
+
+`LlamaCpp\LlamaCppToolCallParser` stays, with the same namespace and `parse()` API.
+`LocalModelRuntimeInterface`, `LocalModelHandleInterface` and the `Runtime\Runtime*` value objects
+also stay.
+
+Through the factory:
+
+```json
+{
+    "providers": {
+        "llama-cpp": { "baseUrl": "http://localhost:8080/v1" }
+    }
+}
+```
+
+Or directly:
+
+```php
+use CarmeloSantana\PHPAgents\Provider\LlamaServerProvider;
+
+// llama-server -m model.gguf --jinja -c 8192 --port 8080
+$provider = new LlamaServerProvider(model: 'local', baseUrl: 'http://localhost:8080/v1');
+```
+
+## Upgrading to 0.19.1
+
+### Behaviour changes
+
+| Change | Who is affected | What to do |
+|--------|-----------------|------------|
+| `OpenAICompatibleProvider` (and the providers built on it), `AnthropicProvider`, `GeminiProvider` and `OpenAIResponsesProvider` read a usage token count sent as an integral float (`12.0`) or a string of ASCII digits (`"12"`) as that count; 0.19 read only JSON integers, so such a response reported no usage. A negative, fractional, non-finite or out-of-range number, and any other string (`"1e3"`, `" 12"`, `"-1"`), still counts as not reported | Applications that tally usage from endpoints that send counts as strings or floats | None |
+| Gemini tool and `structured()` schemas no longer carry `additionalItems` or any `x-` extension keyword, at every node the schema walk reaches; Gemini's `Schema` has no field for them. A property *named* `x-foo` or `additionalItems` keeps its name. `default` is now sent as written, where 0.19 stripped it | Gemini callers whose tool or response schemas use those keywords, such as MCP tools that carry `x-mcp-header` | None |
+
 ## Upgrading to 0.19
 
 0.19 is additive and requires no application changes. To receive usage and request metadata
@@ -150,19 +237,8 @@ public function streamEvents(array $messages, array $tools = [], array $options 
 
 ### Deprecated
 
-- The in-process llama.cpp FFI path is deprecated in 0.18 and will be removed or fixed in 0.20:
-  `LlamaCppProvider`, every class under `Runtime\LlamaCpp`, and the `setup-llama-cpp.sh`,
-  `test-llama-cpp-runtime.sh` and llama.cpp benchmark scripts. Move to `LlamaServerProvider`
-  ([LlamaServerProvider](PROVIDERS.md#llamaserverprovider)): run `llama-server -m model.gguf --jinja`
-  and set a `baseUrl` on the `llama-cpp` provider config, or construct the provider directly.
-  - The binding is incompatible with llama.cpp after b9174 (2026-05-16): structs it passes by value
-    changed, and a newer build segfaults on the first model load.
-  - It does not stream under `Agent`: with tools, which `Agent` always passes, it
-    buffers the whole generation, and a cancel, `maxRunSeconds` and `maxResponseBytes` act only
-    after generation ends. The buffer has no cap. 0.18 does not fix this.
-  - `setup-llama-cpp.sh` now builds llama.cpp at tag b9174 (and warns that `--install-method brew`
-    installs a newer, incompatible build).
-  - `LlamaCpp\LlamaCppToolCallParser` is not deprecated.
+- The in-process llama.cpp FFI path was deprecated in 0.18 and is removed in 0.20: see
+  [Upgrading to 0.20.0](#upgrading-to-0200).
 
 ### New and not breaking
 

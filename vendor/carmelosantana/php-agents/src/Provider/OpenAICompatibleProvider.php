@@ -6,8 +6,11 @@ namespace CarmeloSantana\PHPAgents\Provider;
 
 use CarmeloSantana\PHPAgents\Config\ModelDefinition;
 use CarmeloSantana\PHPAgents\Contract\MessageInterface;
+use CarmeloSantana\PHPAgents\Contract\StructuredStreaming;
 use CarmeloSantana\PHPAgents\Contract\ToolInterface;
 use CarmeloSantana\PHPAgents\Enum\ProviderFinishReason;
+use CarmeloSantana\PHPAgents\Provider\Internal\StructuredStream;
+use CarmeloSantana\PHPAgents\Provider\Internal\TokenCount;
 use CarmeloSantana\PHPAgents\Provider\Stream\Finish;
 use CarmeloSantana\PHPAgents\Provider\Stream\ReasoningDelta;
 use CarmeloSantana\PHPAgents\Provider\Stream\StreamEvent;
@@ -22,7 +25,7 @@ use Psr\Log\LoggerInterface;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
 use Symfony\Contracts\HttpClient\ResponseInterface;
 
-class OpenAICompatibleProvider extends AbstractProvider
+class OpenAICompatibleProvider extends AbstractProvider implements StructuredStreaming
 {
     public function __construct(
         string $model,
@@ -411,7 +414,7 @@ class OpenAICompatibleProvider extends AbstractProvider
      */
     protected function parseUsage(array $usage): ?Usage
     {
-        $count = static fn(mixed $value): ?int => is_int($value) ? $value : null;
+        $count = TokenCount::from(...);
         $prompt = $count($usage['prompt_tokens'] ?? null);
         $completion = $count($usage['completion_tokens'] ?? null);
         $total = $count($usage['total_tokens'] ?? null);
@@ -452,9 +455,29 @@ class OpenAICompatibleProvider extends AbstractProvider
     public function structured(array $messages, string $schema, array $options = []): mixed
     {
         $options[UsageReport::OPERATION_OPTION] = 'structured';
+
+        return $this->chat($messages, [], $this->structuredOptions($schema, $options));
+    }
+
+    public function structuredEvents(array $messages, string $schema, array $options = []): iterable
+    {
+        $options[UsageReport::OPERATION_OPTION] = 'structured_stream';
+
+        return StructuredStream::fromText($this->streamEvents($messages, [], $this->structuredOptions($schema, $options)));
+    }
+
+    /**
+     * The options structured() and structuredEvents() send: $options with a json_schema
+     * response_format, or $options unchanged when $schema is not a JSON object or list.
+     *
+     * @param array<string, mixed> $options
+     * @return array<string, mixed>
+     */
+    private function structuredOptions(string $schema, array $options): array
+    {
         $schemaData = json_decode($schema, true);
         if (!is_array($schemaData)) {
-            return $this->chat($messages, [], $options);
+            return $options;
         }
 
         // The OpenAI (and Ollama OpenAI-compat) spec REQUIRES the schema to be
@@ -481,7 +504,7 @@ class OpenAICompatibleProvider extends AbstractProvider
             $innerSchema = StrictSchemaNormalizer::normalize($innerSchema);
         }
 
-        return $this->chat($messages, [], [
+        return [
             ...$options,
             'response_format' => [
                 'type' => 'json_schema',
@@ -491,7 +514,7 @@ class OpenAICompatibleProvider extends AbstractProvider
                     'strict' => $strict,
                 ],
             ],
-        ]);
+        ];
     }
 
     public function models(): array

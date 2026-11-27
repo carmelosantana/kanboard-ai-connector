@@ -9,7 +9,7 @@ use Kanboard\Plugin\AiConnector\Model\ProviderRegistry;
 use KanboardTests\units\Base;
 
 /**
- * The bundled php-agents is 0.19+ (RunLimits, typed stream events, UsageListener) and the Anthropic default is Sonnet 5.5.
+ * The bundled php-agents is 0.21+ (RunLimits, typed stream events, UsageListener, structured streaming, status-only HTTP errors) and the Anthropic default is Sonnet 5.5.
  */
 class PhpAgentsVersionTest extends Base
 {
@@ -31,6 +31,13 @@ class PhpAgentsVersionTest extends Base
     {
         $this->assertTrue(class_exists(Tick::class));
         $this->assertTrue(interface_exists(UsageListener::class));
+    }
+
+    public function testBundlesStructuredStreamingAndStatusOnlyErrors(): void
+    {
+        $this->assertTrue(interface_exists(\CarmeloSantana\PHPAgents\Contract\StructuredStreaming::class));
+        $this->assertTrue(class_exists(\CarmeloSantana\PHPAgents\Provider\Stream\StructuredDelta::class));
+        $this->assertTrue(class_exists(\CarmeloSantana\PHPAgents\Exception\HttpStatusException::class));
     }
 
     public function testDefaultAnthropicModel(): void

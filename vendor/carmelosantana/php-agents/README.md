@@ -69,9 +69,8 @@ new OpenAICompatibleProvider(model: 'meta-llama/llama-3.1-70b-instruct',        
     apiKey: getenv('OPENROUTER_API_KEY'), baseUrl: 'https://openrouter.ai/api/v1');
 ```
 
-All classes live in `CarmeloSantana\PHPAgents\Provider`. The native llama.cpp runtime (FFI, no
-HTTP sidecar; deprecated in 0.18, use `LlamaServerProvider`) and the Claude Code CLI provider are
-covered in [Local Runtime](docs/LOCAL-RUNTIME.md) and [Providers](docs/PROVIDERS.md).
+All classes live in `CarmeloSantana\PHPAgents\Provider`. `LlamaServerProvider` and the Claude Code
+CLI provider are covered in [Providers](docs/PROVIDERS.md).
 
 | Feature | OpenAI Compatible | OpenAI Responses | Ollama | Anthropic | Gemini | xAI | Mistral |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -132,8 +131,8 @@ parameter types and MCP are in [Tools & Toolkits](docs/TOOLS-AND-TOOLKITS.md).
 | [Agents](docs/AGENTS.md) | The loop, observers, cancellation, context window |
 | [Providers](docs/PROVIDERS.md) | Feature matrix, streaming, structured output, images |
 | [Tools & Toolkits](docs/TOOLS-AND-TOOLKITS.md) | Parameters, execution policies, MCP client and server |
+| [MCP Server](docs/mcp-server.md) | Hosting and vendoring the stateless HTTP server |
 | [Embeddings & Vector Stores](docs/MEMORY.md) | Embedding providers, similarity search |
-| [Local Runtime](docs/LOCAL-RUNTIME.md) | Native llama.cpp setup, benchmarks (deprecated) |
 | [Architecture](docs/ARCHITECTURE.md) | Design, diagrams, extension points |
 | [Upgrading](docs/UPGRADING.md) | Breaking changes and migration notes per release |
 | [Decisions](docs/adr/) | Architecture decision records |

@@ -6,10 +6,13 @@ namespace CarmeloSantana\PHPAgents\Provider;
 
 use CarmeloSantana\PHPAgents\Config\ModelDefinition;
 use CarmeloSantana\PHPAgents\Contract\MessageInterface;
+use CarmeloSantana\PHPAgents\Contract\StructuredStreaming;
 use CarmeloSantana\PHPAgents\Contract\ToolInterface;
 use CarmeloSantana\PHPAgents\Enum\ProviderFinishReason;
 use CarmeloSantana\PHPAgents\Enum\Role;
 use CarmeloSantana\PHPAgents\Image\Internal\PublicImageDownloader;
+use CarmeloSantana\PHPAgents\Provider\Internal\StructuredStream;
+use CarmeloSantana\PHPAgents\Provider\Internal\TokenCount;
 use CarmeloSantana\PHPAgents\Provider\Stream\Finish;
 use CarmeloSantana\PHPAgents\Provider\Stream\ReasoningDelta;
 use CarmeloSantana\PHPAgents\Provider\Stream\StreamEvent;
@@ -39,7 +42,7 @@ use Symfony\Contracts\HttpClient\ResponseInterface;
  * Scope: Core chat + tools + base64 images via inlineData.
  * Future: video input, File API (fileData), grounding, code execution.
  */
-final class GeminiProvider extends AbstractProvider
+final class GeminiProvider extends AbstractProvider implements StructuredStreaming
 {
     /** JSON Schema keywords unsupported by Gemini. */
     private const UNSUPPORTED_KEYWORDS = [
@@ -49,7 +52,6 @@ final class GeminiProvider extends AbstractProvider
         '$defs',
         'definitions',
         'patternProperties',
-        'default',
         // Gemini's Schema has no field for these (Kanboard subtask 6482). It has `anyOf`,
         // which is kept and walked instead.
         'oneOf',
@@ -60,6 +62,7 @@ final class GeminiProvider extends AbstractProvider
         'else',
         'contains',
         'prefixItems',
+        'additionalItems',
         'propertyNames',
         'dependentSchemas',
         'dependentRequired',
@@ -322,16 +325,36 @@ final class GeminiProvider extends AbstractProvider
     public function structured(array $messages, string $schema, array $options = []): mixed
     {
         $options[UsageReport::OPERATION_OPTION] = 'structured';
+
+        return $this->chat($messages, [], $this->structuredOptions($schema, $options));
+    }
+
+    public function structuredEvents(array $messages, string $schema, array $options = []): iterable
+    {
+        $options[UsageReport::OPERATION_OPTION] = 'structured_stream';
+
+        return StructuredStream::fromText($this->streamEvents($messages, [], $this->structuredOptions($schema, $options)));
+    }
+
+    /**
+     * The options structured() and structuredEvents() send: $options with a JSON responseSchema
+     * in generationConfig, or $options unchanged when $schema is not JSON or names no schema.
+     *
+     * @param array<string, mixed> $options
+     * @return array<string, mixed>
+     */
+    private function structuredOptions(string $schema, array $options): array
+    {
         $schemaData = json_decode($schema, true);
         if ($schemaData === null) {
-            return $this->chat($messages, [], $options);
+            return $options;
         }
 
         // Use generationConfig with response_mime_type for structured output
         $responseSchema = $schemaData['schema'] ?? $schemaData['parameters'] ?? $schemaData;
 
         if (!is_array($responseSchema)) {
-            return $this->chat($messages, [], $options);
+            return $options;
         }
 
         // responseSchema is the same Gemini Schema a function declaration's parameters are,
@@ -355,7 +378,7 @@ final class GeminiProvider extends AbstractProvider
             ],
         );
 
-        return $this->chat($messages, [], $options);
+        return $options;
     }
 
     /**
@@ -755,14 +778,15 @@ final class GeminiProvider extends AbstractProvider
      * descends through the members of `properties`, a single-schema `items` and the
      * `anyOf` branches, so a raw schema's nested nodes are normalised as well as its
      * top level. stripKeywords then unsets each UNSUPPORTED_KEYWORDS keyword — `$defs`,
-     * `oneOf`, `not` and `if` among them — on each node the walk reaches, and
-     * whatever the keyword holds goes with it. A child node left with nothing
-     * becomes `{}` in normalizeChildForGemini(). A subschema under a keyword the
+     * `oneOf`, `not` and `if` among them — and stripKeywordsWithPrefix every `x-`
+     * extension keyword, on each node the walk reaches, and whatever the keyword holds
+     * goes with it. A child node left with nothing becomes `{}` in
+     * normalizeChildForGemini(). A subschema under a keyword the
      * walk neither descends into nor strips, such as `unevaluatedProperties`, is
      * passed through unchanged.
      *
      * stripKeywords acts on the node, not on its `properties` map, whose members are
-     * walked one by one: a property named `not` or `oneOf` keeps its name and is
+     * walked one by one: a property named `not`, `oneOf` or `x-foo` keeps its name and is
      * normalised, and a `required` list naming it is left as it is.
      *
      * JsonSchemaRepair restores an empty `{}` as a `\stdClass`, and casts to one a
@@ -826,7 +850,10 @@ final class GeminiProvider extends AbstractProvider
             }
         }
 
-        return SchemaUtils::stripKeywords($schema, self::UNSUPPORTED_KEYWORDS);
+        return SchemaUtils::stripKeywordsWithPrefix(
+            SchemaUtils::stripKeywords($schema, self::UNSUPPORTED_KEYWORDS),
+            'x-',
+        );
     }
 
     /**
@@ -988,7 +1015,7 @@ final class GeminiProvider extends AbstractProvider
             return null;
         }
 
-        $count = static fn(mixed $value): ?int => is_int($value) ? $value : null;
+        $count = TokenCount::from(...);
         $prompt = $count($usage['promptTokenCount'] ?? null);
         $candidates = $count($usage['candidatesTokenCount'] ?? null);
         $thoughts = $count($usage['thoughtsTokenCount'] ?? null);
