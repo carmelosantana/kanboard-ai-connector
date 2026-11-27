@@ -2,6 +2,14 @@
 
 All notable changes to AiConnector will be documented here.
 
+## 1.4.0 — Unreleased
+
+### Added
+- Model routing: AI Connector decides which profile each AI request uses. The most specific choice wins: a person's pick (where a plugin offers the picker), the project's profile, the feature's assignment, the plugin's assignment, then the global default. A deleted or not-ready profile is skipped and logged, and resolution falls to the next level.
+- **Settings → AI Connector → Model routing** (admins): mark which profiles are **Available to users**, assign a profile per plugin and per AI feature, and **Lock** a feature so it always uses its assignment and shows no picker. Broken assignments are flagged.
+- A project **AI** page (project managers): one **AI profile for this project**, chosen from the available profiles, and **Let members switch the AI model**.
+- Routing API for plugin authors: the `aiconnector:features` hook (`{id, label, plugin}`), `ProviderRegistry::resolve($feature, $projectId, $pick)`, `pickerOptions()`, `offeredProfiles()`, `profileReady()`, `features()`, `brokenAssignments()`, and the shared `AiConnector:picker/select` partial. A pick is checked on the server: one the person may not make is ignored.
+
 ## 1.3.0 — 2026-11-25
 
 ### Added

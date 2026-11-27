@@ -169,6 +169,7 @@ foreach ($routing_broken as $b) {
     <?php if (empty($routing_features)): ?>
         <p class="form-help"><?= t('No installed plugin has registered an AI feature yet.') ?></p>
     <?php else: ?>
+    <div style="overflow-x:auto">
     <table class="table-striped">
         <thead>
             <tr>
@@ -215,6 +216,7 @@ foreach ($routing_broken as $b) {
         <?php endforeach ?>
         </tbody>
     </table>
+    </div>
     <?php endif ?>
     <div class="form-actions">
         <button type="submit" class="btn btn-blue"><?= t('Save') ?></button>

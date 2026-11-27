@@ -117,6 +117,35 @@ counted one at a time, so parallel requests cannot overshoot the quota.
 Plugins that ask for AI Connector 1.3.0 or later use these limits, and keep their
 AI features off with an older AI Connector.
 
+## Model routing
+
+AI Connector decides which profile each AI request uses. The most specific choice wins:
+
+1. **A person's pick**, where a plugin shows the AI model picker.
+2. **The project's profile**, set on the project's **AI** page by a project manager.
+3. **The feature's assignment** and then **the plugin's assignment**, set by an admin.
+4. **The global default** profile.
+
+A locked feature skips 1 and 2 and always uses its assignment. A deleted profile,
+or one without a key, is skipped (and logged), and the next level is used.
+
+**Settings → AI Connector → Model routing** (admins):
+
+- **Available to users**: which profiles people and project managers may choose.
+  The global default is always offered.
+- A profile per plugin and per AI feature. Plugins list their features here once installed.
+- **Lock**: the feature always uses its assignment and shows no picker.
+
+![The Model routing section of the AI Connector settings](https://raw.githubusercontent.com/carmelosantana/kanboard-ai-connector/main/docs/screenshots/model-routing.webp)
+
+**Project → AI** (project managers): one **AI profile for this project**, and
+**Let members switch the AI model**. With the switch off, members see no picker.
+
+![The AI page in a project's settings](https://raw.githubusercontent.com/carmelosantana/kanboard-ai-connector/main/docs/screenshots/project-ai.webp)
+
+Without a project (a personal dashboard, a report across projects), the picker is
+shown whenever two or more profiles are available to users and the feature is not locked.
+
 ## Test Connection
 
 Each profile row on the Settings page has a **Test Connection** button
@@ -215,6 +244,42 @@ Call it outside any database transaction (it throws inside one, since a rollback
 would erase the count). Feature-detect it (`class_exists(AiQuota::class)`) and keep AI off when it is
 missing, so an older AI Connector does not leave your feature unmetered.
 `maxInputChars()` gives the cap, for trimming optional context to fit.
+
+## Routing API (v1.4.0+)
+
+Register your AI features in `initialize()`. Ids are the names you pass to `AiQuota::consume()`
+and match `^[a-z0-9][a-z0-9._-]{0,63}$`:
+
+```php
+$this->hook->on('aiconnector:features', fn () => [
+    ['id' => 'myplugin.summary', 'label' => t('My plugin: summary'), 'plugin' => 'MyPlugin'],
+]);
+```
+
+Before each request, resolve the profile and pass it on:
+
+```php
+$registry = new ProviderRegistry($this->container);
+$profileId = $registry->resolve('myplugin.summary', $projectId, $this->request->getStringParam('ai_profile') ?: null);
+$result = $registry->structured($messages, $schema, $profileId);
+```
+
+`resolve()` returns `''` when no level has a ready profile. Pass `null` for `$projectId` when the
+request has no single project. Never use the posted `ai_profile` directly: `resolve()` ignores a
+pick the person may not make.
+
+Show the shared picker in your form with options computed by your controller:
+
+```php
+// controller
+'ai_options' => $registry->pickerOptions('myplugin.summary', $projectId),
+// template
+<?= $this->render('AiConnector:picker/select', ['options' => $ai_options]) ?>
+```
+
+It renders nothing when the feature is locked, fewer than two profiles are offered, or the
+project does not let members switch. Feature-detect with
+`method_exists(ProviderRegistry::class, 'resolve')` and keep AI off without it.
 
 ## ModelCatalog API (v1.1.0+)
 
