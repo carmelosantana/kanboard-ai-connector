@@ -5,8 +5,20 @@ namespace Kanboard\Plugin\AiConnector\Stream;
 use Kanboard\Core\Base;
 use Kanboard\Plugin\AiConnector\Model\AiQuota;
 use Kanboard\Plugin\AiConnector\Model\ProviderRegistry;
+use CarmeloSantana\PHPAgents\Provider\AbstractProvider;
+use CarmeloSantana\PHPAgents\Provider\RequestLimits;
+use CarmeloSantana\PHPAgents\Provider\Stream\Finish as UpstreamFinish;
+use CarmeloSantana\PHPAgents\Provider\Stream\ToolInputEnd;
+use CarmeloSantana\PHPAgents\Provider\Stream\ToolInputStart;
+use Kanboard\Plugin\AiConnector\Stream\Event\Error;
+use Kanboard\Plugin\AiConnector\Stream\Event\Finish;
+use Kanboard\Plugin\AiConnector\Stream\Event\Progress;
+use Kanboard\Plugin\AiConnector\Stream\Event\ReasoningDelta;
 use Kanboard\Plugin\AiConnector\Stream\Event\Refused;
 use Kanboard\Plugin\AiConnector\Stream\Event\Started;
+use Kanboard\Plugin\AiConnector\Stream\Event\TextDelta;
+use Kanboard\Plugin\AiConnector\Stream\Internal\EventMapper;
+use Kanboard\Plugin\AiConnector\Stream\Internal\MessageMapper;
 use Pimple\Container;
 
 /**
@@ -72,7 +84,7 @@ class AiStream extends Base
         try {
             $provider = $registry->buildProvider($profileId);
         } catch (\Throwable $e) {
-            yield $this->refuse('setup_failed', $userId, $feature, get_class($e));
+            yield $this->refuse('setup_failed', $userId, $feature, self::shortClass($e));
             return;
         }
 
@@ -88,28 +100,147 @@ class AiStream extends Base
         $quota = $this->quota ?? new AiQuota($this->container);
         $reservation = $quota->reserve($userId, $feature, $input, $request->attemptKey, $request->maxDuration());
         if (! $reservation->ok()) {
-            yield $this->refuse($reservation->outcome, $userId, $feature, null, $reservation->message);
+            // AiQuota already logged its refusal: one line per refusal.
+            yield $this->refuse($reservation->outcome, $userId, $feature, null, $reservation->message, log: false);
             return;
         }
 
+        $finished = false;
         try {
             $profile = $registry->findProfile($profileId) ?? ['provider' => '', 'model' => ''];
             $model = $profile['model'] !== '' ? $profile['model'] : (ProviderRegistry::DEFAULT_MODELS[$profile['provider']] ?? '');
-            yield new Started($model, $provider instanceof \CarmeloSantana\PHPAgents\Provider\AbstractProvider);
+            foreach ($this->stream($provider, $request, $model, $userId) as $event) {
+                $finished = $event instanceof Finish;
+                yield $event;
+            }
         } finally {
-            $quota->closeAttempt((int) $reservation->attemptId, 'finished');
+            // Drained, abandoned or thrown: the attempt closes exactly once, here.
+            $quota->closeAttempt((int) $reservation->attemptId, $finished ? 'finished' : 'failed');
         }
+    }
+
+    /**
+     * Started, the mapped provider events and Progress heartbeats, then exactly one terminal
+     * event (Finish or Error), after which nothing is yielded. The token is checked on every
+     * upstream event, ticks included; a cancel before the provider's Finish stops reading, which
+     * abandons the php-agents generator and so cancels its HTTP request.
+     *
+     * @return \Generator<int, object>
+     */
+    private function stream(object $provider, AiRequest $request, string $model, int $userId): \Generator
+    {
+        $streaming = $provider instanceof AbstractProvider;
+        $started = ($this->clock)();
+        yield new Started($model, $streaming);
+
+        if ($request->cancel?->isCancelled()) {
+            yield new Finish('cancelled', $model, null, null);
+            return;
+        }
+        if (! $streaming) {
+            // The blocking path for providers without native streaming is not built yet.
+            $this->logFailure('provider_error', $userId, $request->feature, 'not a streaming provider');
+            yield EventMapper::error('provider_error');
+            return;
+        }
+
+        $provider = $provider->withRequestLimits(new RequestLimits(
+            idleTimeout: $request->idleTimeout(),
+            maxDuration: $request->maxDuration(),
+            tickInterval: 0.25,
+        ));
+        $lastProgress = $started;
+        $receivedChars = 0;
+        $dropped = [];
+        $terminal = null;
+
+        try {
+            foreach ($provider->streamEvents(MessageMapper::toPhpAgents($request->messages), [], []) as $event) {
+                if ($terminal !== null) {
+                    // Past the provider's Finish (its last event): let its generator end on its own,
+                    // so a completed response is not cancelled; a late cancel changes nothing.
+                    continue;
+                }
+                if ($event instanceof UpstreamFinish) {
+                    $terminal = EventMapper::finish($event, $model);
+                    if ($terminal instanceof Error) {
+                        $this->logFailure('provider_error', $userId, $request->feature, 'provider finish error');
+                    }
+                    continue;
+                }
+                if ($request->cancel?->isCancelled()) {
+                    $terminal = new Finish('cancelled', $model, null, null);
+                    break;
+                }
+
+                if ($event instanceof ToolInputStart || $event instanceof ToolInputEnd) {
+                    if (isset($dropped[$event->index]) || ! EventMapper::isValidToolCall($event->id, $event->name)) {
+                        if (! isset($dropped[$event->index])) {
+                            $dropped[$event->index] = true;
+                            $this->logger->info(sprintf('[AiConnector] AI stream dropped a tool call with an invalid name or id: user %d, feature %s, index %d',
+                                $userId, self::safeFeature($request->feature), $event->index));
+                        }
+                        continue;
+                    }
+                }
+
+                $mapped = EventMapper::map($event);
+                if ($mapped instanceof TextDelta || $mapped instanceof ReasoningDelta) {
+                    $receivedChars += mb_strlen($mapped->text, 'UTF-8');
+                }
+                if ($mapped !== null) {
+                    yield $mapped;
+                }
+
+                $now = ($this->clock)();
+                if ($now - $lastProgress >= 1.0) {
+                    $lastProgress = $now;
+                    yield new Progress((int) round(($now - $started) * 1000), $receivedChars);
+                }
+            }
+        } catch (\Throwable $e) {
+            if ($terminal === null) {
+                $terminal = EventMapper::exception($e);
+                $this->logFailure($terminal->code, $userId, $request->feature, self::shortClass($e));
+            }
+        }
+
+        if ($terminal === null) {
+            $this->logFailure('provider_error', $userId, $request->feature, 'no finish');
+            $terminal = EventMapper::error('provider_error');
+        }
+        yield $terminal;
+    }
+
+    private function logFailure(string $code, int $userId, string $feature, string $detail): void
+    {
+        $this->logger->info(sprintf('[AiConnector] AI stream failed (%s): user %d, feature %s, %s',
+            $code, $userId, self::safeFeature($feature), $detail));
+    }
+
+    private static function safeFeature(string $feature): string
+    {
+        return mb_substr(preg_replace('/[^a-z0-9._-]/i', '', $feature), 0, 64);
+    }
+
+    /** An exception's class for the log: its last name segment, cut at the @ of an anonymous class. */
+    private static function shortClass(\Throwable $e): string
+    {
+        $class = strstr(get_class($e), '@', true) ?: get_class($e);
+        $short = substr(strrchr('\\' . $class, '\\'), 1);
+        return preg_replace('/[^A-Za-z0-9_]/', '', $short);
     }
 
     /**
      * The one refusal path: a fixed sentence for the person and one sanitized log line (never the
      * raw feature, a profile id, a URL, a key or an exception message; $detail is a class name).
      */
-    private function refuse(string $code, int $userId, string $feature, ?string $detail = null, ?string $message = null): Refused
+    private function refuse(string $code, int $userId, string $feature, ?string $detail = null, ?string $message = null, bool $log = true): Refused
     {
-        $this->logger->info(sprintf('[AiConnector] AI stream refused (%s): user %d, feature %s%s',
-            $code, $userId, mb_substr(preg_replace('/[^a-z0-9._-]/i', '', $feature), 0, 64),
-            $detail === null ? '' : ', ' . preg_replace('/[^A-Za-z0-9_\\\\]/', '', $detail)));
+        if ($log) {
+            $this->logger->info(sprintf('[AiConnector] AI stream refused (%s): user %d, feature %s%s',
+                $code, $userId, self::safeFeature($feature), $detail === null ? '' : ', ' . $detail));
+        }
 
         return new Refused($code, $message ?? match ($code) {
             'not_ready' => t('AI is not set up.'),

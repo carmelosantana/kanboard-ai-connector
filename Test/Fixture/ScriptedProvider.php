@@ -3,37 +3,63 @@
 namespace Kanboard\Plugin\AiConnector\Test\Fixture;
 
 use CarmeloSantana\PHPAgents\Provider\AbstractProvider;
+use CarmeloSantana\PHPAgents\Provider\RequestLimits;
 use CarmeloSantana\PHPAgents\Provider\Response;
 
 /**
  * A php-agents provider for AiStream tests: streamEvents() yields a scripted list of php-agents
- * events, or throws the scripted exception once they run out. Every call is recorded in $calls,
- * so a test can assert that no provider request was made. It never touches the network.
+ * events, or throws the scripted exception once they run out. A \Closure in the script is run
+ * instead of yielded (a side effect between events, such as a cancel). Every call is recorded in
+ * $calls, so a test can assert that no provider request was made. It never touches the network.
+ *
+ * $calls and $ended are shared with clones (withRequestLimits() returns one), so the test's
+ * instance sees what the streamed copy did.
  */
 final class ScriptedProvider extends AbstractProvider
 {
-    /** @var list<array{method: string, args: array}> */
+    /** @var list<array{method: string, args: array, limits?: RequestLimits}> */
     public array $calls = [];
+
+    /** How the last stream ended: null (not started or still open), 'completed', 'threw' or 'abandoned'. */
+    public ?string $ended = null;
+
+    /** @var array{calls: array, ended: ?string} references to $calls and $ended */
+    private array $shared;
 
     /** @param list<object> $events */
     public function __construct(private array $events = [], private ?\Throwable $throw = null, string $model = 'scripted')
     {
         parent::__construct($model, 'http://scripted.invalid');
+        // A clone keeps a property reference only while something else holds it too (PHP unwraps
+        // a reference with one holder), so $shared keeps both alive: every copy records into the
+        // same slots.
+        $this->shared = ['calls' => &$this->calls, 'ended' => &$this->ended];
     }
 
     public function streamEvents(array $messages, array $tools = [], array $options = []): iterable
     {
-        $this->calls[] = ['method' => 'streamEvents', 'args' => [$messages, $tools, $options]];
+        $this->calls[] = ['method' => 'streamEvents', 'args' => [$messages, $tools, $options], 'limits' => $this->requestLimits()];
         return $this->play();
     }
 
     private function play(): \Generator
     {
-        foreach ($this->events as $event) {
-            yield $event;
-        }
-        if ($this->throw !== null) {
-            throw $this->throw;
+        $how = 'abandoned';
+        try {
+            foreach ($this->events as $event) {
+                if ($event instanceof \Closure) {
+                    $event();
+                    continue;
+                }
+                yield $event;
+            }
+            if ($this->throw !== null) {
+                $how = 'threw';
+                throw $this->throw;
+            }
+            $how = 'completed';
+        } finally {
+            $this->ended = $how;
         }
     }
 

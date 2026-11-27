@@ -153,6 +153,38 @@ class AiStreamGuardTest extends Base
         $this->assertUncharged();
     }
 
+    public function testPrincipalIsCheckedBeforeFeature(): void
+    {
+        unset($_SESSION['user']);
+        $this->assertRefused($this->drain($this->request('t.unregistered')), 'not_signed_in');
+        $this->assertUncharged();
+    }
+
+    public function testReservationRefusalIsLoggedOnce(): void
+    {
+        $this->setting(AiQuota::MAX_INPUT_CHARS, '3');
+        $this->assertRefused($this->drain($this->request()), 'too_long');
+        $this->assertCount(1, $this->logged, "AiQuota's line only");
+    }
+
+    public function testRefusalLogKeepsOnlyTheShortExceptionClass(): void
+    {
+        $registry = new class($this->container) extends ProviderRegistry {
+            public function buildProvider(?string $profileId = null): \CarmeloSantana\PHPAgents\Contract\ProviderInterface
+            {
+                throw new class('secret') extends \RuntimeException {};
+            }
+        };
+        $stream = new AiStream($this->container);
+        $stream->setRegistryForTesting($registry);
+        $events = iterator_to_array($stream->events($this->request()), false);
+        $this->assertRefused($events, 'setup_failed');
+        $line = array_values(array_filter($this->logged, fn ($l) => str_contains($l, 'setup_failed')))[0];
+        $this->assertStringEndsWith(', RuntimeException', $line, 'an anonymous class is cut at the @');
+        $this->assertStringNotContainsString('\\', $line, 'no namespace');
+        $this->assertStringNotContainsString('.php', $line);
+    }
+
     public function testUnknownFeatureIsRefusedBeforeRouting(): void
     {
         // With a dangling default, routing would refuse no_profile; the feature check runs first.
@@ -309,12 +341,13 @@ class AiStreamGuardTest extends Base
 
     public function testStartedCarriesTheConfiguredModelAfterReserve(): void
     {
+        $this->provider = new ScriptedProvider([new \CarmeloSantana\PHPAgents\Provider\Stream\Finish(\CarmeloSantana\PHPAgents\Enum\ProviderFinishReason::Stop)]);
         $events = $this->drain($this->request());
-        $this->assertCount(1, $events);
+        $this->assertCount(2, $events);
         $this->assertInstanceOf(Started::class, $events[0]);
         $this->assertSame('model-a', $events[0]->model);
         $this->assertTrue($events[0]->streaming, 'an AbstractProvider streams');
-        $this->assertSame([], $this->provider->calls, 'Task 7 stops at Started');
+        $this->assertCount(1, $this->provider->calls, 'the request goes after the reservation');
 
         $this->assertSame(1, $this->counted(), 'the reservation is charged');
         $row = $this->container['db']->table(AiQuota::ATTEMPTS_TABLE)->findOne();

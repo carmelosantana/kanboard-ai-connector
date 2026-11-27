@@ -5,9 +5,7 @@ namespace Kanboard\Plugin\AiConnector\Model;
 use Kanboard\Core\Base;
 
 use CarmeloSantana\PHPAgents\Contract\ProviderInterface;
-use CarmeloSantana\PHPAgents\Message\SystemMessage;
-use CarmeloSantana\PHPAgents\Message\UserMessage;
-use CarmeloSantana\PHPAgents\Message\AssistantMessage;
+use Kanboard\Plugin\AiConnector\Stream\Internal\MessageMapper;
 use Kanboard\Plugin\AiConnector\Stream\Internal\StructuredDecoder;
 use CarmeloSantana\PHPAgents\Provider\AnthropicProvider;
 use CarmeloSantana\PHPAgents\Provider\OpenAICompatibleProvider;
@@ -478,34 +476,12 @@ class ProviderRegistry extends Base
     public function structured(array $messages, string $schema, ?string $profileId = null): array
     {
         $provider = $this->buildProvider($profileId);
-        $mapped   = $this->mapMessages($messages);
+        $mapped   = MessageMapper::toPhpAgents($messages);
         $raw      = $provider->structured($mapped, $schema);
         return $this->normalizeStructuredResult($raw);
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
-
-    /**
-     * Map [['role'=>..,'content'=>..], ...] to php-agents message objects.
-     * Unknown roles fall back to UserMessage (defensive).
-     *
-     * @param array<int, array{role:string, content:string}> $messages
-     * @return array<int, object>
-     */
-    private function mapMessages(array $messages): array
-    {
-        $out = [];
-        foreach ($messages as $m) {
-            $role    = is_array($m) ? (string) ($m['role'] ?? 'user') : 'user';
-            $content = is_array($m) ? (string) ($m['content'] ?? '') : (string) $m;
-            $out[] = match ($role) {
-                'system'    => new SystemMessage($content),
-                'assistant' => new AssistantMessage($content),
-                default     => new UserMessage($content),
-            };
-        }
-        return $out;
-    }
 
     /**
      * Normalize php-agents structured() return to a decoded PHP array.
