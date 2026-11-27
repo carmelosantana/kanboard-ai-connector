@@ -256,14 +256,6 @@ class AiStream extends Base
             $provider = $provider->withRequestLimits(self::blockingLimits($request->maxDuration()));
         }
 
-        if (interface_exists('CarmeloSantana\PHPAgents\Contract\StructuredStreaming')
-            && $provider instanceof \CarmeloSantana\PHPAgents\Contract\StructuredStreaming) {
-            // TASK 10: replace with the streamed structured call (php-agents 0.21 structuredEvents()).
-            // Until then a StructuredStreaming provider takes the same blocking call as any other.
-            yield from $blocking->structured($provider, $messages, (string) $request->schema, $request->cancel);
-            return;
-        }
-
         yield from $blocking->structured($provider, $messages, (string) $request->schema, $request->cancel);
     }
 
