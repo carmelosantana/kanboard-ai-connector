@@ -176,6 +176,54 @@ class AiStreamTextTest extends Base
         $this->assertSame('abandoned', $provider->ended, 'reading stops at the Finish');
     }
 
+    /** Started, then the consumer pauses until $at before asking for the rest. */
+    private function pausedAfterStarted(\Generator $events, float $at): array
+    {
+        $out = [$events->current()];
+        $this->now = $at;
+        $events->next();
+        while ($events->valid()) {
+            $out[] = $events->current();
+            $events->next();
+        }
+        return $out;
+    }
+
+    public static function pausesAfterStarted(): array
+    {
+        // [pause until, expected idle, expected max] for idle 60 s, max 300 s, reserved at 0
+        return [
+            'no pause' => [0.0, 60.0, 300.0],
+            '100 s' => [100.0, 60.0, 200.0],
+            '250 s: idle is cut to what is left' => [250.0, 50.0, 50.0],
+        ];
+    }
+
+    /** @dataProvider pausesAfterStarted */
+    #[\PHPUnit\Framework\Attributes\DataProvider('pausesAfterStarted')]
+    public function testLimitsCountFromTheReservationNotFromTheCall(float $at, float $idle, float $max): void
+    {
+        $provider = new ScriptedProvider([self::finish()]);
+        $this->pausedAfterStarted($this->stream($provider), $at);
+        $this->assertEquals(new RequestLimits(idleTimeout: $idle, maxDuration: $max, tickInterval: 0.25), $provider->calls[0]['limits']);
+    }
+
+    public function testNoCallOnceTheDeadlineHasPassed(): void
+    {
+        foreach ([300.0, 1000.0] as $at) {
+            $this->container['db']->table(AiQuota::ATTEMPTS_TABLE)->remove();
+            $this->logged = [];
+            $this->now = 0.0;
+            $provider = new ScriptedProvider([new UpText('never'), self::finish()]);
+            $events = $this->pausedAfterStarted($this->stream($provider), $at);
+            $this->assertSame(['Started', 'Error'], self::shape($events), "paused until $at");
+            $this->assertSame('timeout', $events[1]->code);
+            $this->assertSame([], $provider->calls, 'no provider request after the deadline');
+            $this->assertSame('failed', $this->attemptStatus());
+            $this->assertCount(1, array_filter($this->logged, fn ($l) => str_contains($l, 'AI stream failed (timeout)')));
+        }
+    }
+
     public function testRequestLimitsComeFromTheClampedRequest(): void
     {
         $provider = new ScriptedProvider([self::finish()]);

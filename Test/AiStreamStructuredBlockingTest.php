@@ -88,14 +88,32 @@ class AiStreamStructuredBlockingTest extends Base
         $this->container['memoryCache']->flush();
     }
 
-    private function drain(object $provider, string $schema = self::SCHEMA, ?AiCancellation $cancel = null, float $max = 300.0): array
+    private function events(object $provider, string $schema = self::SCHEMA, ?AiCancellation $cancel = null, float $max = 300.0): \Generator
     {
         $registry = new ProviderRegistry($this->container);
         $registry->setProviderForTesting($provider);
         $stream = new AiStream($this->container, null, fn (): float => $this->now);
         $stream->setRegistryForTesting($registry);
-        return iterator_to_array($stream->events(new AiRequest('t.one', 'k1', [['role' => 'user', 'content' => 'title this']],
-            schema: $schema, cancel: $cancel, maxDuration: $max)), false);
+        return $stream->events(new AiRequest('t.one', 'k1', [['role' => 'user', 'content' => 'title this']],
+            schema: $schema, cancel: $cancel, maxDuration: $max));
+    }
+
+    private function drain(object $provider, string $schema = self::SCHEMA, ?AiCancellation $cancel = null, float $max = 300.0): array
+    {
+        return iterator_to_array($this->events($provider, $schema, $cancel, $max), false);
+    }
+
+    /** Started, then the consumer pauses until $at before asking for the rest. */
+    private function pausedAfterStarted(\Generator $events, float $at): array
+    {
+        $out = [$events->current()];
+        $this->now = $at;
+        $events->next();
+        while ($events->valid()) {
+            $out[] = $events->current();
+            $events->next();
+        }
+        return $out;
     }
 
     /** A ScriptedProvider whose stream would answer as text, so taking the text path shows. */
@@ -124,6 +142,27 @@ class AiStreamStructuredBlockingTest extends Base
         $this->assertSame([], $call['args'][2], 'no options');
         $this->assertEquals(new RequestLimits(idleTimeout: 90.0, maxDuration: 90.0, tickInterval: 0.25), $call['limits'],
             'a blocking answer sends nothing until done: idle = max = the request maximum');
+    }
+
+    public function testBlockingLimitsCountFromTheReservation(): void
+    {
+        $provider = self::scripted(['title' => 'Hi']);
+        $this->pausedAfterStarted($this->events($provider, max: 90.0), 30.0);
+        $this->assertEquals(90.0 - 30.0, $provider->calls[0]['limits']->maxDuration, 'a pause after Started is spent from the request maximum');
+        $this->assertEquals(60.0, $provider->calls[0]['limits']->idleTimeout);
+    }
+
+    public function testNoStructuredCallOnceTheDeadlineHasPassed(): void
+    {
+        foreach ([self::scripted(['title' => 'Hi']), new BlockingProvider(structured: ['title' => 'Hi'])] as $i => $provider) {
+            $this->container['db']->table(AiQuota::ATTEMPTS_TABLE)->remove();
+            $this->now = 0.0;
+            $events = $this->pausedAfterStarted($this->events($provider, max: 90.0), 90.0);
+            $this->assertSame(['Started', 'Error'], self::shape($events), "provider $i");
+            $this->assertSame('timeout', $events[1]->code);
+            $this->assertSame([], $provider->calls, "provider $i: no call after the deadline");
+            $this->assertSame('failed', $this->attemptStatus());
+        }
     }
 
     public function testSchemaRequestYieldsStartedFalseOneStructuredDeltaAndFinishWithResult(): void

@@ -115,6 +115,9 @@ class AiStream extends Base
             $input[] = $request->schema;
         }
         $quota = $this->quota ?? new AiQuota($this->container);
+        // The deadline counts from the reservation, before its lease (maxDuration + 60 s) starts:
+        // time the consumer spends between events is spent from it too.
+        $deadline = ($this->clock)() + $request->maxDuration();
         $reservation = $quota->reserve($userId, $feature, $input, $request->attemptKey, $request->maxDuration());
         if (! $reservation->ok()) {
             // AiQuota already logged its refusal: one line per refusal.
@@ -124,7 +127,7 @@ class AiStream extends Base
 
         $finished = false;
         try {
-            foreach ($this->stream($provider, $request, $model, $userId) as $event) {
+            foreach ($this->stream($provider, $request, $model, $userId, $deadline) as $event) {
                 $finished = $event instanceof Finish;
                 yield $event;
             }
@@ -148,15 +151,16 @@ class AiStream extends Base
      *
      * @return \Generator<int, object>
      */
-    private function stream(object $provider, AiRequest $request, string $model, int $userId): \Generator
+    private function stream(object $provider, AiRequest $request, string $model, int $userId, float $deadline): \Generator
     {
         $started = ($this->clock)();
         $messages = MessageMapper::toPhpAgents($request->messages);
         $blocking = new BlockingCall(
             $model,
-            onException: fn (\Throwable $e): Error => $this->failure($e, $started, $request, $userId),
+            onException: fn (\Throwable $e): Error => $this->failure($e, $deadline, $request, $userId),
             onFinishError: fn (string $detail) => $this->logFailure('provider_error', $userId, $request->feature, $detail),
             onDroppedTool: fn (int $index) => $this->logDroppedTool($userId, $request->feature, $index),
+            prepare: fn (object $provider, bool $structured): object => $this->blockingProvider($provider, $deadline, $request, $userId),
         );
 
         if ($request->schema !== null) {
@@ -174,9 +178,14 @@ class AiStream extends Base
             return;
         }
 
+        $remaining = $this->remaining($deadline);
+        if ($remaining <= 0.0) {
+            yield $this->deadlinePassed($request, $userId);
+            return;
+        }
         $provider = $provider->withRequestLimits(new RequestLimits(
-            idleTimeout: $request->idleTimeout(),
-            maxDuration: $request->maxDuration(),
+            idleTimeout: min($request->idleTimeout(), $remaining),
+            maxDuration: $remaining,
             tickInterval: 0.25,
         ));
         $lastProgress = $started;
@@ -233,17 +242,14 @@ class AiStream extends Base
             } else {
                 // Rejected before any output: a protocol fallback, not a retry.
                 $rejected = $output ? null : EventMapper::rejectedStatus($e);
-                $terminal = $rejected === null ? $this->failure($e, $started, $request, $userId) : null;
+                $terminal = $rejected === null ? $this->failure($e, $deadline, $request, $userId) : null;
             }
         }
 
         if ($rejected !== null) {
             $this->logger->info(sprintf('[AiConnector] AI stream: streaming rejected (HTTP %d), blocking fallback: user %d, feature %s',
                 $rejected, $userId, self::safeFeature($request->feature)));
-            // A blocking answer sends nothing until it is complete, so the idle limit is the time
-            // left; the maximum duration counts from Started, not from the fallback.
-            $remaining = max(1.0, $request->maxDuration() - (($this->clock)() - $started));
-            $provider = $provider->withRequestLimits(self::blockingLimits($remaining));
+            // Limited to the time left by blockingProvider(); none left: Error(timeout), no call.
             yield from $blocking->textAnswer($provider, $messages);
             return;
         }
@@ -256,18 +262,41 @@ class AiStream extends Base
 
     /**
      * The structured path: a request with a schema never goes through streamEvents(). One
-     * blocking structured() call (BlockingCall), whose limits are the fallback's rule: a blocking
-     * answer sends nothing until it is done, so idle = max = the request's maximum duration.
+     * blocking structured() call (BlockingCall), limited by blockingProvider() right before it.
      *
      * @return \Generator<int, object>
      */
     private function structured(object $provider, BlockingCall $blocking, array $messages, AiRequest $request): \Generator
     {
-        if ($provider instanceof AbstractProvider) {
-            $provider = $provider->withRequestLimits(self::blockingLimits($request->maxDuration()));
-        }
-
         yield from $blocking->structured($provider, $messages, (string) $request->schema, $request->cancel);
+    }
+
+    /**
+     * BlockingCall's last step before a provider call: past the deadline, the Error that replaces
+     * the call; else the provider limited to the time left. A blocking answer sends nothing until
+     * it is done, so idle = max = the time left. A provider that is not an AbstractProvider takes
+     * no limits.
+     */
+    private function blockingProvider(object $provider, float $deadline, AiRequest $request, int $userId): object
+    {
+        $remaining = $this->remaining($deadline);
+        if ($remaining <= 0.0) {
+            return $this->deadlinePassed($request, $userId);
+        }
+        return $provider instanceof AbstractProvider ? $provider->withRequestLimits(self::blockingLimits($remaining)) : $provider;
+    }
+
+    /** Seconds left before the deadline; zero or less once it has passed. */
+    private function remaining(float $deadline): float
+    {
+        return $deadline - ($this->clock)();
+    }
+
+    /** The deadline passed before a provider call or while reading one: Error(timeout), logged. */
+    private function deadlinePassed(AiRequest $request, int $userId): Error
+    {
+        $this->logFailure('timeout', $userId, $request->feature, 'deadline passed');
+        return EventMapper::error('timeout');
     }
 
     /** Limits for one blocking call: no bytes arrive until it is done, so idle = max = $seconds. */
@@ -276,10 +305,10 @@ class AiStream extends Base
         return new RequestLimits(idleTimeout: $seconds, maxDuration: $seconds, tickInterval: 0.25);
     }
 
-    /** A thrown request as its Error, logged by class: a transport failure at the maximum duration is a timeout. */
-    private function failure(\Throwable $e, float $started, AiRequest $request, int $userId): Error
+    /** A thrown request as its Error, logged by class: a transport failure at the deadline is a timeout. */
+    private function failure(\Throwable $e, float $deadline, AiRequest $request, int $userId): Error
     {
-        $error = EventMapper::exception($e, ($this->clock)() - $started >= $request->maxDuration());
+        $error = EventMapper::exception($e, $this->remaining($deadline) <= 0.0);
         $this->logFailure($error->code, $userId, $request->feature, self::shortClass($e));
         return $error;
     }

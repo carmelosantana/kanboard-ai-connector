@@ -190,6 +190,26 @@ class AiStreamBlockingTest extends Base
         $this->assertSame(1, $this->countRows(), 'charged once');
     }
 
+    public function testNoBlockingCallOnceTheDeadlineHasPassed(): void
+    {
+        $provider = new BlockingProvider(new Response('late', ProviderFinishReason::Stop));
+        $registry = new ProviderRegistry($this->container);
+        $registry->setProviderForTesting($provider);
+        $stream = new AiStream($this->container, null, fn (): float => $this->now);
+        $stream->setRegistryForTesting($registry);
+        $events = $stream->events(new AiRequest('t.one', 'k1', [['role' => 'user', 'content' => 'hello']], maxDuration: 30.0));
+
+        $this->assertFalse($events->current()->streaming);
+        $this->now = 30.0; // the consumer holds Started until the deadline
+        $events->next();
+        $this->assertInstanceOf(Error::class, $events->current());
+        $this->assertSame('timeout', $events->current()->code);
+        $events->next();
+        $this->assertFalse($events->valid());
+        $this->assertSame([], $provider->calls, 'no provider request after the deadline');
+        $this->assertSame('failed', $this->attemptStatus());
+    }
+
     public function testEmptyBlockingAnswerHasNoDelta(): void
     {
         $events = $this->drain(new BlockingProvider(self::answer('')));
@@ -416,12 +436,30 @@ class AiStreamBlockingTest extends Base
         }
     }
 
-    public function testFallbackGetsAtLeastOneSecond(): void
+    public function testFallbackGetsExactlyTheTimeLeft(): void
     {
         $provider = new ScriptedProvider([fn () => $this->now = 299.5], self::httpError(400));
         $provider->chatAnswer = self::answer();
         $this->drain($provider);
-        $this->assertEquals(new RequestLimits(idleTimeout: 1.0, maxDuration: 1.0, tickInterval: 0.25), $provider->calls[1]['limits']);
+        $this->assertEquals(new RequestLimits(idleTimeout: 0.5, maxDuration: 0.5, tickInterval: 0.25), $provider->calls[1]['limits'],
+            'no floor: the fallback never runs past the request maximum');
+    }
+
+    public function testNoFallbackOnceTheDeadlineHasPassed(): void
+    {
+        foreach ([300.0, 301.0] as $at) {
+            $this->container['db']->table(AiQuota::ATTEMPTS_TABLE)->remove();
+            $this->logged = [];
+            $this->now = 0.0;
+            $provider = new ScriptedProvider([fn () => $this->now = $at], self::httpError(400));
+            $provider->chatAnswer = self::answer();
+            $events = $this->drain($provider);
+            $this->assertSame(['Started', 'Error'], self::shape($events), "rejected at $at");
+            $this->assertSame('timeout', $events[1]->code);
+            $this->assertSame(['streamEvents'], array_column($provider->calls, 'method'), 'no blocking call');
+            $this->assertSame('failed', $this->attemptStatus());
+            $this->assertCount(1, $this->logLines('AI stream failed (timeout)'));
+        }
     }
 
     public function testWrappedRejectionFallsBack(): void

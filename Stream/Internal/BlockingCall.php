@@ -23,7 +23,9 @@ use Kanboard\Plugin\AiConnector\Stream\Event\ToolCallStart;
  * One blocking chat() or structured() call, yielded in the stream's event shape: the whole answer
  * as one delta, tool calls as Start/End pairs, then exactly one terminal event. Used for
  * providers without native streaming and as the fallback when an endpoint rejects the streamed
- * request. The token is checked once, before the call; there is no Progress during it.
+ * request. The token is checked once, before the call; there is no Progress during it. Right
+ * before the call, $prepare applies the request limits to the provider, or returns an Error
+ * (the deadline has passed), in which case there is no call.
  *
  * Usage comes from a php-agents UsageListener attached for the one call when the provider
  * reports usage, else from the Response.
@@ -39,15 +41,20 @@ final class BlockingCall
     /** @var \Closure(int): void logs a dropped tool call by index */
     private \Closure $onDroppedTool;
 
+    /** @var \Closure(ProviderInterface, bool): (ProviderInterface|Error) limits for one call (bool: structured), or the Error that replaces it */
+    private \Closure $prepare;
+
     public function __construct(
         private string $model,
         ?\Closure $onException = null,
         ?\Closure $onFinishError = null,
         ?\Closure $onDroppedTool = null,
+        ?\Closure $prepare = null,
     ) {
         $this->onException = $onException ?? fn (\Throwable $e): Error => EventMapper::exception($e);
         $this->onFinishError = $onFinishError ?? static function (string $detail): void {};
         $this->onDroppedTool = $onDroppedTool ?? static function (int $index): void {};
+        $this->prepare = $prepare ?? static fn (ProviderInterface $provider, bool $structured): ProviderInterface => $provider;
     }
 
     /**
@@ -74,6 +81,11 @@ final class BlockingCall
      */
     public function textAnswer(ProviderInterface $provider, array $messages): \Generator
     {
+        $provider = ($this->prepare)($provider, false);
+        if ($provider instanceof Error) {
+            yield $provider;
+            return;
+        }
         $usage = self::recorder();
         try {
             $response = self::withListener($provider, $usage)->chat($messages, [], []);
@@ -126,6 +138,11 @@ final class BlockingCall
             return;
         }
 
+        $provider = ($this->prepare)($provider, true);
+        if ($provider instanceof Error) {
+            yield $provider;
+            return;
+        }
         $usage = self::recorder();
         try {
             $raw = self::withListener($provider, $usage)->structured($messages, $schema, []);
