@@ -103,7 +103,7 @@ class ProviderRegistry extends Base
     /**
      * Full profile structs incl. base_url. Order = storage order.
      *
-     * @return array<int, array{id:string,label:string,provider:string,model:string,base_url:string}>
+     * @return array<int, array{id:string,label:string,provider:string,model:string,base_url:string,available:bool}>
      */
     public function getProfiles(): array
     {
@@ -127,6 +127,7 @@ class ProviderRegistry extends Base
                 'provider' => (string) $p['provider'],
                 'model'    => (string) ($p['model'] ?? ''),
                 'base_url' => (string) ($p['base_url'] ?? ''),
+                'available' => (bool) ($p['available'] ?? false),
             ];
         }
         return $out;

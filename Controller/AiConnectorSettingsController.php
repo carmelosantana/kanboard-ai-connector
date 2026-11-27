@@ -98,7 +98,8 @@ class AiConnectorSettingsController extends BaseController
             $id = $this->mintId($label, count($profiles));
         }
 
-        $struct = ['id' => $id, 'label' => $label, 'provider' => $provider, 'model' => $model, 'base_url' => $baseUrl];
+        $struct = ['id' => $id, 'label' => $label, 'provider' => $provider, 'model' => $model, 'base_url' => $baseUrl,
+            'available' => (bool) ($previous['available'] ?? false)];
 
         // Upsert into the profiles list.
         $replaced = false;

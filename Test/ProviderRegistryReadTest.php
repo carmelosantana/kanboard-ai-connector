@@ -40,6 +40,17 @@ class ProviderRegistryReadTest extends Base
         }
     }
 
+    public function testAvailableFlagReadsAsBoolDefaultFalse(): void
+    {
+        $this->seedProfiles([
+            ['id' => 'p1', 'label' => 'A', 'provider' => 'anthropic', 'model' => 'm', 'base_url' => '', 'available' => true],
+            ['id' => 'p2', 'label' => 'B', 'provider' => 'anthropic', 'model' => 'm', 'base_url' => ''],
+        ], 'p1');
+
+        $this->assertTrue($this->registry()->findProfile('p1')['available']);
+        $this->assertFalse($this->registry()->findProfile('p2')['available']);
+    }
+
     public function testListProfilesEmptyWhenNoneConfigured(): void
     {
         $this->assertSame([], $this->registry()->listProfiles());

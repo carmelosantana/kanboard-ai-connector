@@ -107,6 +107,18 @@ class SettingsEndpointTest extends Base
         return (string) (new ProviderRegistry($this->container))->findProfile('p1')['base_url'];
     }
 
+    public function testEditingAProfileKeepsItsAvailableFlag(): void
+    {
+        $this->seed(ProviderRegistry::PROFILES_KEY, json_encode([
+            ['id' => 'p1', 'label' => 'P', 'provider' => 'anthropic', 'model' => 'm', 'base_url' => '', 'available' => true],
+        ]));
+        $this->save(['provider' => 'anthropic', 'base_url' => '', 'label' => 'Renamed']);
+
+        $profile = (new ProviderRegistry($this->container))->findProfile('p1');
+        $this->assertSame('Renamed', $profile['label']);
+        $this->assertTrue($profile['available']);
+    }
+
     public function testChangingTheBaseUrlHostClearsTheStoredKey(): void
     {
         $this->seedProfile('openai', 'https://api.openai.com/v1');
