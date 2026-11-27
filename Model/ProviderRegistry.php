@@ -246,6 +246,31 @@ class ProviderRegistry extends Base
         return '';
     }
 
+    /**
+     * What the shared picker shows for $feature: whether to show it, the offered profiles
+     * (id/label/provider/model only — never a key or base URL) and the preselected profile,
+     * which is what resolve() would choose without a pick.
+     *
+     * @return array{show: bool, profiles: list<array{id:string,label:string,provider:string,model:string}>, selected: string}
+     */
+    public function pickerOptions(string $feature, ?int $projectId = null): array
+    {
+        $offered = $this->offeredIds();
+        $locked = isset($this->features()[$feature])
+            && in_array($feature, (new ModelRouting($this->container))->assignments()['locked'], true);
+        $profiles = [];
+        foreach ($this->listProfiles() as $p) {
+            if (in_array($p['id'], $offered, true)) {
+                $profiles[] = $p;
+            }
+        }
+        return [
+            'show' => $this->pickAllowed($feature, $projectId, $locked),
+            'profiles' => $profiles,
+            'selected' => $this->resolve($feature, $projectId),
+        ];
+    }
+
     /** Ready profiles a person may pick: those marked available, plus the global default. */
     private function offeredIds(): array
     {
