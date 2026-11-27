@@ -125,7 +125,8 @@ final class BlockingCall
     /**
      * Started(streaming: false), one StructuredDelta under the 256 KiB cap, then Finish: `stop`
      * with the decoded array, `invalid_output` when it is not a non-empty array, or
-     * `output_too_large`. A Response that did not finish `stop` gets the stream path's terminal
+     * `output_too_large`. A Response that did not finish `stop`, or a decoded array whose usage
+     * report says the call did not complete (anything but stop or tool_use), gets the stream path's terminal
      * for its finish reason instead, with no StructuredDelta and no result.
      *
      * @return \Generator<int, object>
@@ -154,6 +155,14 @@ final class BlockingCall
         if ($raw instanceof Response && $raw->finishReason !== ProviderFinishReason::Stop) {
             // Not a finished document: the stream path's terminal, no delta and no result.
             yield $this->terminal($raw->finishReason, self::usageOf($usage->report, $raw->usage));
+            return;
+        }
+        $reported = $usage->report?->finishReason;
+        if (! $raw instanceof Response && $reported !== null
+            && $reported !== ProviderFinishReason::Stop && $reported !== ProviderFinishReason::ToolUse) {
+            // A decoded array (a forced function call) whose call did not complete: its real
+            // outcome is only in the usage report. Stop or a completed tool call is a document.
+            yield $this->terminal($reported, self::usageOf($usage->report, null));
             return;
         }
 

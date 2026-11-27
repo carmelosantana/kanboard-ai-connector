@@ -13,6 +13,7 @@ use CarmeloSantana\PHPAgents\Provider\Response;
 use CarmeloSantana\PHPAgents\Provider\Stream\Finish as UpFinish;
 use CarmeloSantana\PHPAgents\Provider\Stream\TextDelta as UpText;
 use CarmeloSantana\PHPAgents\Provider\Usage as UpUsage;
+use CarmeloSantana\PHPAgents\Provider\UsageReport;
 use Kanboard\Plugin\AiConnector\Model\AiQuota;
 use Kanboard\Plugin\AiConnector\Model\ProviderRegistry;
 use Kanboard\Plugin\AiConnector\Stream\AiCancellation;
@@ -321,6 +322,37 @@ class AiStreamStructuredBlockingTest extends Base
         $this->assertNull($terminal->result, 'no result unless the provider stopped');
         $this->assertSame(9, $terminal->usage->totalTokens);
         $this->assertSame('finished', $this->attemptStatus(), 'the provider answered: charged');
+    }
+
+    /**
+     * A provider that hands back an already-decoded array (OpenAI Responses' forced function
+     * call) reports its real outcome only through the usage listener: an incomplete or failed
+     * call is no result, a completed function call (tool_use) or stop is.
+     *
+     * @dataProvider finishReasons
+     */
+    public function testDecodedArrayHonoursTheReportedFinishReason(ProviderFinishReason $reason, string $expected): void
+    {
+        $provider = new BlockingProvider(structured: ['title' => 'Hi']);
+        $provider->report = new UsageReport('structured', 'test', 'model-a', 'm', new UpUsage(4, 5, 9), null, null, $reason, 5, false);
+        $events = $this->drain($provider);
+        $terminal = end($events);
+
+        if (in_array($reason, [ProviderFinishReason::Stop, ProviderFinishReason::ToolUse], true)) {
+            $this->assertSame(['Started', 'StructuredDelta', 'Finish'], self::shape($events));
+            $this->assertSame('stop', $terminal->reason);
+            $this->assertSame(['title' => 'Hi'], $terminal->result);
+            return;
+        }
+        if ($expected === 'Error:provider_error') {
+            $this->assertSame(['Started', 'Error'], self::shape($events));
+            $this->assertSame('provider_error', $terminal->code);
+            return;
+        }
+        $this->assertSame(['Started', 'Finish'], self::shape($events), 'no StructuredDelta for an unfinished document');
+        $this->assertSame($expected, $terminal->reason);
+        $this->assertNull($terminal->result);
+        $this->assertSame(9, $terminal->usage->totalTokens);
     }
 
     public function testBareSchemaAndNamedEnvelopeBothReachTheProvider(): void
