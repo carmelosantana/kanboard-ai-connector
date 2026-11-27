@@ -1,7 +1,7 @@
 <?php
 namespace Kanboard\Plugin\AiConnector\Schema;
 
-const VERSION = 3;
+const VERSION = 4;
 
 // One row per AI request let through by AiQuota, kept for an hour (the quota window).
 function version_1($pdo)
@@ -43,4 +43,10 @@ function version_3($pdo)
     )');
     $pdo->exec('CREATE UNIQUE INDEX IF NOT EXISTS aiconnector_attempts_key_uq ON aiconnector_attempts(user_id, feature, attempt_key)');
     $pdo->exec('CREATE INDEX IF NOT EXISTS aiconnector_attempts_running_idx ON aiconnector_attempts(user_id, status)');
+}
+
+function version_4($pdo)
+{
+    // reserve() prunes old attempts by created_at on every call.
+    $pdo->exec('CREATE INDEX IF NOT EXISTS aiconnector_attempts_created_idx ON aiconnector_attempts(created_at)');
 }

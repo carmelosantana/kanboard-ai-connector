@@ -37,6 +37,20 @@ class AttemptsSchemaTest extends Base
         return (int) $this->container['db']->table('aiconnector_attempts')->count();
     }
 
+    public function testCreatedAtIsIndexedForPruning(): void
+    {
+        // reserve() prunes attempts by created_at on every call: without an index that delete
+        // scans (and on InnoDB range-locks) the whole table.
+        \Kanboard\Plugin\AiConnector\Schema\version_4($this->container['db']->getConnection());
+        $pdo = $this->container['db']->getConnection();
+        $names = match (DB_DRIVER) {
+            'sqlite' => array_column($pdo->query("PRAGMA index_list('aiconnector_attempts')")->fetchAll(\PDO::FETCH_ASSOC), 'name'),
+            'mysql' => array_column($pdo->query('SHOW INDEX FROM aiconnector_attempts')->fetchAll(\PDO::FETCH_ASSOC), 'Key_name'),
+            'postgres' => array_column($pdo->query("SELECT indexname FROM pg_indexes WHERE tablename = 'aiconnector_attempts'")->fetchAll(\PDO::FETCH_ASSOC), 'indexname'),
+        };
+        $this->assertContains('aiconnector_attempts_created_idx', $names);
+    }
+
     public function testUniqueKeyPerUserAndFeature(): void
     {
         $this->assertTrue($this->insert($this->ana, 'summary', 'abc'));

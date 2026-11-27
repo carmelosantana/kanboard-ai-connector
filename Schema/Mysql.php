@@ -1,7 +1,7 @@
 <?php
 namespace Kanboard\Plugin\AiConnector\Schema;
 
-const VERSION = 3;
+const VERSION = 4;
 
 // One row per AI request let through by AiQuota, kept for an hour (the quota window).
 function version_1($pdo)
@@ -49,4 +49,10 @@ function version_3($pdo)
         INDEX aiconnector_attempts_running_idx (user_id, status),
         FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB CHARSET=utf8mb4');
+}
+
+function version_4($pdo)
+{
+    // reserve() prunes old attempts by created_at on every call.
+    $pdo->exec('CREATE INDEX aiconnector_attempts_created_idx ON aiconnector_attempts(created_at)');
 }
