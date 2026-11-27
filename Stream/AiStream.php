@@ -119,7 +119,7 @@ class AiStream extends Base
             }
         } finally {
             // Drained, abandoned or thrown: the attempt closes exactly once, here.
-            $quota->closeAttempt((int) $reservation->attemptId, $finished ? 'finished' : 'failed');
+            $quota->closeAttempt($userId, (int) $reservation->attemptId, $finished ? 'finished' : 'failed');
         }
     }
 

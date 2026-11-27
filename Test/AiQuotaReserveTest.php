@@ -147,9 +147,9 @@ class AiQuotaReserveTest extends Base
         $this->reserve('b');
         $this->reserve('c');
         $this->now += 5;
-        $this->quota()->closeAttempt($first->attemptId, 'finished');
+        $this->quota()->closeAttempt($this->ana, $first->attemptId, 'finished');
         $this->now += 5;
-        $this->quota()->closeAttempt($first->attemptId, 'failed');
+        $this->quota()->closeAttempt($this->ana, $first->attemptId, 'failed');
 
         $row = $this->attempts()[0];
         $this->assertSame('finished', $row['status'], 'a second close changes nothing');
@@ -159,10 +159,21 @@ class AiQuotaReserveTest extends Base
         $this->assertSame(Reservation::DUPLICATE_ATTEMPT, $this->reserve('a')->outcome);
     }
 
+    public function testCloseAttemptOnlyEndsTheCallersOwnAttempt(): void
+    {
+        $bobs = $this->reserve('a', 'summary', $this->bob);
+        $this->quota()->closeAttempt($this->ana, $bobs->attemptId, 'failed');
+        $this->assertSame('running', $this->attempts()[0]['status'], "another person's id closes nothing");
+        $this->assertEmpty($this->attempts()[0]['finished_at']);
+
+        $this->quota()->closeAttempt($this->bob, $bobs->attemptId, 'finished');
+        $this->assertSame('finished', $this->attempts()[0]['status']);
+    }
+
     public function testCloseAttemptRejectsOtherStatuses(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->quota()->closeAttempt($this->reserve('a')->attemptId, 'running');
+        $this->quota()->closeAttempt($this->ana, $this->reserve('a')->attemptId, 'running');
     }
 
     public function testAttemptRowsOlderThanADayArePruned(): void

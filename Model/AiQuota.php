@@ -96,17 +96,19 @@ final class AiQuota
     }
 
     /**
-     * Ends a running attempt as finished or failed. An attempt that already ended keeps its
-     * first ending. Call it outside a transaction, like consume(): a caller's rollback would
-     * leave the attempt running until its lease ends.
+     * Ends $userId's running attempt as finished or failed; an id that belongs to someone else
+     * changes nothing. An attempt that already ended keeps its first ending. Call it outside a
+     * transaction, like consume(): a caller's rollback would leave the attempt running until
+     * its lease ends.
      */
-    public function closeAttempt(int $attemptId, string $status): void
+    public function closeAttempt(int $userId, int $attemptId, string $status): void
     {
         if (! in_array($status, ['finished', 'failed'], true)) {
             throw new \InvalidArgumentException('An attempt closes as finished or failed.');
         }
         $this->container['db']->table(self::ATTEMPTS_TABLE)
             ->eq('id', $attemptId)
+            ->eq('user_id', $userId)
             ->eq('status', 'running')
             ->update(['status' => $status, 'finished_at' => ($this->clock)()]);
     }
