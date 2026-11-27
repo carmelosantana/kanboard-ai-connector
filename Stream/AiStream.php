@@ -17,6 +17,7 @@ use Kanboard\Plugin\AiConnector\Stream\Event\Progress;
 use Kanboard\Plugin\AiConnector\Stream\Event\ReasoningDelta;
 use Kanboard\Plugin\AiConnector\Stream\Event\Refused;
 use Kanboard\Plugin\AiConnector\Stream\Event\Started;
+use Kanboard\Plugin\AiConnector\Stream\Event\Terminal;
 use Kanboard\Plugin\AiConnector\Stream\Event\TextDelta;
 use Kanboard\Plugin\AiConnector\Stream\Internal\BlockingCall;
 use Kanboard\Plugin\AiConnector\Stream\Internal\EventMapper;
@@ -71,40 +72,76 @@ class AiStream extends Base
     /** @return \Generator<int, object> */
     private function run(AiRequest $request, int $userId): \Generator
     {
+        $feature = $request->feature;
+        try {
+            $admitted = $this->admit($request, $userId);
+        } catch (\LogicException $e) {
+            // A programmer error (AiQuota called inside a transaction), not an outage.
+            throw $e;
+        } catch (\Throwable $e) {
+            // A database or configuration failure before any provider call: one terminal event,
+            // never an exception through the event API. Nothing was charged (reserve() rolls back).
+            $admitted = $this->refuse('unavailable', $userId, $feature, self::shortClass($e));
+        }
+        if ($admitted instanceof Refused) {
+            yield $admitted;
+            return;
+        }
+        [$provider, $model, $quota, $attemptId, $deadline] = $admitted;
+
+        $closed = false;
+        try {
+            foreach ($this->stream($provider, $request, $model, $userId, $deadline) as $event) {
+                if ($event instanceof Terminal) {
+                    // Closed before the host sees the terminal: a host that keeps the generator
+                    // after it holds no concurrency slot.
+                    $closed = true;
+                    $this->closeAttempt($quota, $userId, $attemptId, $event instanceof Finish ? 'finished' : 'failed', $feature);
+                }
+                yield $event;
+            }
+        } finally {
+            // Abandoned or thrown before a terminal: the attempt closes exactly once, here.
+            if (! $closed) {
+                $this->closeAttempt($quota, $userId, $attemptId, 'failed', $feature);
+            }
+        }
+    }
+
+    /**
+     * The guard rails, in order, up to a confirmed reservation: a Refused, or what the stream
+     * needs. Anything here may throw; run() turns that into Refused(unavailable).
+     *
+     * @return Refused|array{0: object, 1: string, 2: AiQuota, 3: int, 4: float}
+     */
+    private function admit(AiRequest $request, int $userId): Refused|array
+    {
         $registry = $this->registry ?? new ProviderRegistry($this->container);
         $feature = $request->feature;
 
         if (! $registry->isReady()) {
-            yield $this->refuse('not_ready', 0, $feature);
-            return;
+            return $this->refuse('not_ready', 0, $feature);
         }
-
         if ($userId <= 0) {
-            yield $this->refuse('not_signed_in', 0, $feature);
-            return;
+            return $this->refuse('not_signed_in', 0, $feature);
         }
-
         if (! array_key_exists($feature, $registry->features())) {
-            yield $this->refuse('unknown_feature', $userId, $feature);
-            return;
+            return $this->refuse('unknown_feature', $userId, $feature);
         }
 
         $profileId = $registry->resolve($feature, $request->projectId, $request->pick);
         if ($profileId === '') {
-            yield $this->refuse('no_profile', $userId, $feature);
-            return;
+            return $this->refuse('no_profile', $userId, $feature);
         }
 
         try {
             $provider = $registry->buildProvider($profileId);
         } catch (\Throwable $e) {
-            yield $this->refuse('setup_failed', $userId, $feature, self::shortClass($e));
-            return;
+            return $this->refuse('setup_failed', $userId, $feature, self::shortClass($e));
         }
 
         if ($request->cancel?->isCancelled()) {
-            yield $this->refuse('cancelled', $userId, $feature);
-            return;
+            return $this->refuse('cancelled', $userId, $feature);
         }
 
         // Resolved before the reservation: nothing after reserve() may throw outside stream()'s catch.
@@ -122,19 +159,19 @@ class AiStream extends Base
         $reservation = $quota->reserve($userId, $feature, $input, $request->attemptKey, $request->maxDuration());
         if (! $reservation->ok()) {
             // AiQuota already logged its refusal: one line per refusal.
-            yield $this->refuse($reservation->outcome, $userId, $feature, null, $reservation->message, log: false);
-            return;
+            return $this->refuse($reservation->outcome, $userId, $feature, null, $reservation->message, log: false);
         }
+        return [$provider, $model, $quota, (int) $reservation->attemptId, $deadline];
+    }
 
-        $finished = false;
+    /** Ends the attempt; a failure to record that is logged and never replaces the outcome. */
+    private function closeAttempt(AiQuota $quota, int $userId, int $attemptId, string $status, string $feature): void
+    {
         try {
-            foreach ($this->stream($provider, $request, $model, $userId, $deadline) as $event) {
-                $finished = $event instanceof Finish;
-                yield $event;
-            }
-        } finally {
-            // Drained, abandoned or thrown: the attempt closes exactly once, here.
-            $quota->closeAttempt($userId, (int) $reservation->attemptId, $finished ? 'finished' : 'failed');
+            $quota->closeAttempt($userId, $attemptId, $status);
+        } catch (\Throwable $e) {
+            $this->logger->info(sprintf('[AiConnector] AI stream could not close its attempt: user %d, feature %s, %s',
+                $userId, self::safeFeature($feature), self::shortClass($e)));
         }
     }
 
@@ -208,13 +245,8 @@ class AiStream extends Base
                     }
                     break;
                 }
-                if ($request->cancel?->isCancelled()) {
-                    $terminal = new Finish('cancelled', $model, null, null);
-                    break;
-                }
-                if ($this->remaining($deadline) <= 0.0) {
-                    // Enforced here, not only by the transport's max_duration.
-                    $terminal = $this->deadlinePassed($request, $userId);
+                // Enforced here, not only by the transport's max_duration.
+                if (($terminal = $this->halted($request, $model, $userId, $deadline)) !== null) {
                     break;
                 }
 
@@ -234,12 +266,19 @@ class AiStream extends Base
                 }
                 if ($mapped !== null) {
                     yield $mapped;
+                    // The host decides when this generator resumes: check again before anything else.
+                    if (($terminal = $this->halted($request, $model, $userId, $deadline)) !== null) {
+                        break;
+                    }
                 }
 
                 $now = ($this->clock)();
                 if ($now - $lastProgress >= 1.0) {
                     $lastProgress = $now;
                     yield new Progress((int) round(($now - $started) * 1000), $receivedChars);
+                    if (($terminal = $this->halted($request, $model, $userId, $deadline)) !== null) {
+                        break;
+                    }
                 }
             }
         } catch (\Throwable $e) {
@@ -292,6 +331,15 @@ class AiStream extends Base
             return $this->deadlinePassed($request, $userId);
         }
         return $provider instanceof AbstractProvider ? $provider->withRequestLimits(self::blockingLimits($remaining, $structured)) : $provider;
+    }
+
+    /** Finish(cancelled) once cancelled, Error(timeout) past the deadline, else null: keep reading. */
+    private function halted(AiRequest $request, string $model, int $userId, float $deadline): Finish|Error|null
+    {
+        if ($request->cancel?->isCancelled()) {
+            return new Finish('cancelled', $model, null, null);
+        }
+        return $this->remaining($deadline) <= 0.0 ? $this->deadlinePassed($request, $userId) : null;
     }
 
     /** Seconds left before the deadline; zero or less once it has passed. */

@@ -479,10 +479,69 @@ class AiStreamTextTest extends Base
                 $this->now = 300.0; // the consumer holds the first delta until the deadline
             }
         }
-        // The first delta's Progress is due on resume; the next upstream event is not read on.
-        $this->assertSame(['Started', 'TextDelta', 'Progress', 'Error'], self::shape($events));
-        $this->assertSame('timeout', $events[3]->code);
+        // Checked on resume, before a Progress or the next upstream event.
+        $this->assertSame(['Started', 'TextDelta', 'Error'], self::shape($events));
+        $this->assertSame('timeout', $events[2]->code);
         $this->assertSame('abandoned', $provider->ended);
+    }
+
+    public function testAHostPausedPastTheDeadlineGetsNoFinishAfterIt(): void
+    {
+        // The provider's Finish is next, but the host resumes after the deadline: it is never read.
+        $provider = new ScriptedProvider([new UpText('one'), self::finish()]);
+        $events = [];
+        foreach ($this->stream($provider) as $event) {
+            $events[] = $event;
+            if ($event instanceof TextDelta) {
+                $this->now = 300.0;
+            }
+        }
+        $this->assertSame(['Started', 'TextDelta', 'Error'], self::shape($events));
+        $this->assertSame('timeout', $events[2]->code);
+        $this->assertSame('abandoned', $provider->ended);
+        $this->assertSame('failed', $this->attemptStatus());
+    }
+
+    public function testACancelWhileTheHostHoldsADeltaIsSeenOnResume(): void
+    {
+        $cancel = $this->cancellation();
+        $provider = new ScriptedProvider([new UpText('one'), self::finish()]);
+        $events = [];
+        foreach ($this->stream($provider, $cancel) as $event) {
+            $events[] = $event;
+            if ($event instanceof TextDelta) {
+                $cancel->cancelled = true;
+            }
+        }
+        $this->assertSame(['Started', 'TextDelta', 'Finish'], self::shape($events));
+        $this->assertSame('cancelled', $events[2]->reason);
+        $this->assertSame('abandoned', $provider->ended);
+    }
+
+    public function testTheAttemptIsClosedBeforeTheTerminalIsDelivered(): void
+    {
+        // A host that handles Finish and keeps the generator must not hold a concurrency slot.
+        $generator = $this->stream(new ScriptedProvider([new UpText('a'), self::finish()]));
+        foreach ($generator as $event) {
+            if ($event instanceof Finish) {
+                $this->assertSame('finished', $this->attemptStatus(), 'closed when Finish arrives');
+                break;
+            }
+        }
+        $this->assertSame('finished', $this->attemptStatus());
+        unset($generator);
+        $this->assertSame('finished', $this->attemptStatus(), 'closed once');
+    }
+
+    public function testAnErrorTerminalClosesTheAttemptFailedBeforeDelivery(): void
+    {
+        $generator = $this->stream(new ScriptedProvider([new UpText('a')]));
+        foreach ($generator as $event) {
+            if ($event instanceof Error) {
+                $this->assertSame('failed', $this->attemptStatus());
+                break;
+            }
+        }
     }
 
     public function testEndlessTicksFromAProviderThatIgnoresItsLimitsEndAtTheDeadline(): void

@@ -370,7 +370,7 @@ or null. `message` is a fixed translated sentence; real errors go to the log onl
 | Same key already used by this user for this feature | `Refused(duplicate_attempt)` |
 | Concurrent limit reached | `Refused(too_many_running)` |
 | Hourly quota reached | `Refused(quota)` |
-| The count could not be stored | `Refused(unavailable)` |
+| The count could not be stored, or a database or settings failure before any provider call | `Refused(unavailable)` (nothing charged) |
 | Cancelled before the reservation | `Refused(cancelled)` (nothing charged) |
 | Cancelled after the reservation, before the request | `Finish(cancelled)` (charged) |
 | Provider finished: stop, tool use, max tokens, refusal, content filter, context window exceeded | `Finish(stop / tool_use / max_tokens / refusal / content_filter / context_window_exceeded)` |
@@ -379,7 +379,7 @@ or null. `message` is a fixed translated sentence; real errors go to the log onl
 | Idle limit passed, or `maxDuration` passed since the reservation (consumer time between events included) | `Error(timeout)` |
 | Transport or HTTP failure, anything else | `Error(provider_error)` |
 | The stream ends with no finish | `Error(provider_error)` |
-| Cancelled before a finish arrives | `Finish(cancelled)` |
+| Cancelled before a finish arrives, including while the host holds an event | `Finish(cancelled)` |
 | Finish already received, then cancelled | the provider's `Finish` stands |
 | Structured: `stop`, but the document does not decode to a non-empty array | `Finish(invalid_output)` |
 | Structured: the document is too deep to decode | `Finish(invalid_output)` |
@@ -427,11 +427,17 @@ Before building an `AiRequest`, the host:
   blocking call's idle and total limits are both the time left), and a call that would start after
   the deadline is not made: `Error(timeout)`. AiStream also checks the deadline on every upstream
   event, ticks included, and stops reading with `Error(timeout)`, so a consumer that holds the
-  generator between events spends its own request's time. A provider `Finish` read before the
-  deadline stands. Providers that are not an `AbstractProvider` (e.g. php-agents' CLI provider) get
+  generator between events spends its own request's time. Each time the host resumes the
+  generator, the cancel and the deadline are checked again before a `Progress` or the next
+  upstream read. A provider `Finish` read before the deadline stands. Providers that are not an `AbstractProvider` (e.g. php-agents' CLI provider) get
   no request limits from AiConnector, only the before-the-call check.
 - A blocking structured call downloads at most 1 MiB of response; a larger body fails in transport
   (`Error(provider_error)`) before anything is decoded. The document itself is capped at 256 KiB.
+- The attempt is closed (`finished` on any `Finish`, `failed` on an `Error`) before the terminal
+  event reaches the host, so keeping the generator afterwards holds no concurrency slot. A
+  generator abandoned before its terminal closes the attempt `failed` when it is released.
+- A blocking structured answer of `{}` or `[]` is `Finish(invalid_output)`: consumers want a
+  document. The 256 KiB cap is measured on the JSON AiConnector re-encodes and emits.
 - A `ToolCallStart` without a matching `ToolCallEnd` means the call was not completed (it was
   dropped for an invalid name or id).
 - Requires the PHP `mbstring` extension (php-agents 0.19 needs it, and so does Kanboard).

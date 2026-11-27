@@ -381,14 +381,78 @@ class AiStreamGuardTest extends Base
         $stream = new AiStream($this->container);
         $stream->setRegistryForTesting($registry);
 
-        try {
-            iterator_to_array($stream->events($this->request()), false);
-            $this->fail('the store failure propagates');
-        } catch (\RuntimeException $e) {
-            $this->assertSame('profile store failed', $e->getMessage());
-        }
+        $events = iterator_to_array($stream->events($this->request()), false);
+        $this->assertRefused($events, 'unavailable', 'AI is unavailable right now. Try again later.');
+        $line = implode("\n", array_filter($this->logged, fn ($l) => str_contains($l, 'unavailable')));
+        $this->assertStringContainsString('RuntimeException', $line);
+        $this->assertStringNotContainsString('profile store failed', $line, 'the class, never the message');
         $this->assertSame([], $this->provider->calls, 'no provider call');
         $this->assertUncharged();
+    }
+
+    public function testADatabaseFailureInsideTheReservationIsRefusedUnavailable(): void
+    {
+        // The attempts prune runs before reserve()'s own catch: a lost connection or a missing
+        // migration there still ends the stream with one terminal event.
+        $real = $this->container['db'];
+        $this->container['db'] = new class($real) {
+            public function __construct(private $db) {}
+            public function table($name)
+            {
+                if ($name !== AiQuota::ATTEMPTS_TABLE) {
+                    return $this->db->table($name);
+                }
+                return new class($this->db, $name) extends \PicoDb\Table {
+                    public function remove()
+                    {
+                        throw new \PDOException('SQLSTATE[42S02] db1.internal');
+                    }
+                };
+            }
+            public function __call($method, $args)
+            {
+                return $this->db->$method(...$args);
+            }
+        };
+        try {
+            $events = $this->drain($this->request());
+        } finally {
+            $this->container['db'] = $real;
+        }
+        $this->assertRefused($events, 'unavailable');
+        $this->assertUncharged();
+        foreach ($this->logged as $line) {
+            $this->assertStringNotContainsString('db1.internal', $line);
+        }
+    }
+
+    public function testAReadinessCheckThatThrowsIsRefusedUnavailable(): void
+    {
+        $registry = new class($this->container) extends ProviderRegistry {
+            public function isReady(): bool
+            {
+                throw new \RuntimeException('settings table gone');
+            }
+        };
+        $stream = new AiStream($this->container);
+        $stream->setRegistryForTesting($registry);
+        $this->assertRefused(iterator_to_array($stream->events($this->request()), false), 'unavailable');
+        $this->assertUncharged();
+    }
+
+    public function testCallingInsideATransactionStillThrows(): void
+    {
+        // A programmer error, not an outage: it is not turned into a refusal.
+        $db = $this->container['db'];
+        $db->startTransaction();
+        try {
+            $this->drain($this->request());
+            $this->fail('expected a LogicException');
+        } catch (\LogicException $e) {
+            $this->assertStringContainsString('transaction', $e->getMessage());
+        } finally {
+            $db->cancelTransaction();
+        }
     }
 
     public function testRoutingRunsFreshForEveryRequest(): void
