@@ -167,6 +167,24 @@ class AiStreamStructuredBlockingTest extends Base
         $this->assertNull($events[1]->result);
     }
 
+    public function testOverDeepArrayFromTheProviderIsInvalidOutput(): void
+    {
+        // Providers such as Anthropic (tool_use) hand back an already-decoded array: the depth
+        // rule for JSON text applies to it too, so a 200-deep document is not a result.
+        $deep = 'leaf';
+        for ($i = 0; $i < 200; $i++) {
+            $deep = ['n' => $deep];
+        }
+        foreach ([self::scripted($deep), new BlockingProvider(structured: $deep)] as $i => $provider) {
+            $this->container['db']->table(AiQuota::ATTEMPTS_TABLE)->remove();
+            $events = $this->drain($provider);
+            $terminal = end($events);
+            $this->assertSame('invalid_output', $terminal->reason, "provider $i");
+            $this->assertNull($terminal->result, "provider $i");
+            $this->assertSame('finished', $this->attemptStatus(), 'the provider answered: charged');
+        }
+    }
+
     public function testSchemaRequestIsChargedOnce(): void
     {
         $this->drain(self::scripted(['title' => 'Hi']));

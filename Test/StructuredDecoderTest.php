@@ -45,6 +45,34 @@ class StructuredDecoderTest extends Base
         $this->assertSame([], StructuredDecoder::normalize($this->response($deep)));
     }
 
+    private static function nested(int $levels): array
+    {
+        $value = [];
+        for ($i = 1; $i < $levels; $i++) {
+            $value = ['n' => $value];
+        }
+        return $value;
+    }
+
+    public function testDecodedArrayDepthFollowsTheJsonTextRule(): void
+    {
+        // An array already decoded by the provider gets the same depth rule as JSON text.
+        foreach ([1, 2, 63] as $levels) {
+            $array = self::nested($levels);
+            $this->assertIsArray(StructuredDecoder::decode(json_encode($array)), "$levels levels as text");
+            $this->assertSame($array, StructuredDecoder::normalize($array), "$levels levels as an array");
+        }
+        foreach ([64, 65, 200] as $levels) {
+            $array = self::nested($levels);
+            $this->assertNull(StructuredDecoder::decode(json_encode($array, 0, 1024)), "$levels levels as text");
+            $this->assertSame([], StructuredDecoder::normalize($array), "$levels levels as an array");
+        }
+        $list = [[1, 2], ['a' => [true]], self::nested(62)];
+        $this->assertSame($list, StructuredDecoder::normalize($list), 'a wide array nested 63 deep');
+        $list[] = self::nested(63);
+        $this->assertSame([], StructuredDecoder::normalize($list), 'one deep branch among shallow ones');
+    }
+
     public function testNormalizeMatchesTheOldRegistryRule(): void
     {
         $this->assertSame(['k' => 'v'], StructuredDecoder::normalize(['k' => 'v']));
