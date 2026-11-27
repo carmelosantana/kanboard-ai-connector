@@ -255,18 +255,11 @@ class ProviderRegistry extends Base
      */
     public function pickerOptions(string $feature, ?int $projectId = null): array
     {
-        $offered = $this->offeredIds();
         $locked = isset($this->features()[$feature])
             && in_array($feature, (new ModelRouting($this->container))->assignments()['locked'], true);
-        $profiles = [];
-        foreach ($this->listProfiles() as $p) {
-            if (in_array($p['id'], $offered, true)) {
-                $profiles[] = $p;
-            }
-        }
         return [
             'show' => $this->pickAllowed($feature, $projectId, $locked),
-            'profiles' => $profiles,
+            'profiles' => $this->offeredProfiles(),
             'selected' => $this->resolve($feature, $projectId),
         ];
     }
@@ -290,6 +283,18 @@ class ProviderRegistry extends Base
             }
         }
         return $out;
+    }
+
+    /**
+     * The profiles people and project managers may choose (ready, and marked available or the
+     * global default), as listProfiles() shapes them: no key, no base URL.
+     *
+     * @return list<array{id:string,label:string,provider:string,model:string}>
+     */
+    public function offeredProfiles(): array
+    {
+        $offered = $this->offeredIds();
+        return array_values(array_filter($this->listProfiles(), fn (array $p) => in_array($p['id'], $offered, true)));
     }
 
     /** Ready profiles a person may pick: those marked available, plus the global default. */

@@ -45,11 +45,17 @@ class Plugin extends Base
         $this->route->addRoute('ai-connector/security', 'AiConnectorSettingsController', 'saveSecurity');
         $this->route->addRoute('ai-connector/limits',   'AiConnectorSettingsController', 'saveLimits');
         $this->route->addRoute('ai-connector/routing',  'AiConnectorSettingsController', 'saveRouting');
+        $this->route->addRoute('ai-connector/project/:project_id', 'AiConnectorProjectController', 'show', 'AiConnector');
+        $this->route->addRoute('ai-connector/project/:project_id/save', 'AiConnectorProjectController', 'saveProject', 'AiConnector');
         $this->route->addRoute('ai-connector/delete',   'AiConnectorSettingsController', 'delete');
         $this->route->addRoute('ai-connector/default',  'AiConnectorSettingsController', 'setDefault');
         $this->route->addRoute('ai-connector/test',     'AiConnectorSettingsController', 'testConnection');
         // Its own rule: the old shared name SettingsController took core's admin rule; this one would fall to the app-user default (#7337).
         $this->applicationAccessMap->add('AiConnectorSettingsController', '*', Role::APP_ADMIN);
+        $this->projectAccessMap->add('AiConnectorProjectController', ['show', 'saveProject'], Role::PROJECT_MANAGER);
+
+        // ── Project "AI" page (project managers) ──────────────────────────────
+        $this->hook->on('template:project:sidebar', ['template' => 'AiConnector:project/sidebar']);
     }
 
     public function getPluginName(): string
