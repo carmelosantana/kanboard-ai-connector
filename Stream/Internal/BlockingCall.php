@@ -138,7 +138,17 @@ final class BlockingCall
             yield new Finish('cancelled', $this->model, null, null);
             return;
         }
+        yield from $this->structuredAnswer($provider, $messages, $schema);
+    }
 
+    /**
+     * The structured answer without Started: for the fallback from a rejected structured stream,
+     * whose consumer already holds the stream's Started.
+     *
+     * @return \Generator<int, object>
+     */
+    public function structuredAnswer(ProviderInterface $provider, array $messages, string $schema): \Generator
+    {
         $provider = ($this->prepare)($provider, true);
         if ($provider instanceof Error) {
             yield $provider;

@@ -2,6 +2,14 @@
 
 All notable changes to AiConnector will be documented here.
 
+## 1.6.0 — Unreleased
+
+### Added
+- Streamed structured output: a request with a schema now streams on every HTTP provider (php-agents 0.21's `StructuredStreaming`): `Started(streaming: true)`, the document's fragments as `StructuredDelta`, `Progress` heartbeats and cancellation while it streams, then a `Finish` with the decoded `result`. The 256 KiB cap is checked before each fragment is shown; the 64-level depth rule and the `invalid_output` rules are unchanged. A provider without structured streaming keeps the blocking `structured()` call, and a structured stream rejected as a request-shape error (HTTP 400, 404, 405, 415, 422) before any output falls back to it.
+
+### Changed
+- php-agents 0.21 (from 0.19). A streamed HTTP error is now status-only: AiConnector reads the status and cancels the response, so no error body is read.
+
 ## 1.5.0 — 2026-11-27
 
 ### Added

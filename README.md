@@ -411,13 +411,14 @@ Before building an `AiRequest`, the host:
   three cases:
   - **Providers without native streaming** (not a php-agents `AbstractProvider`, e.g. php-agents' CLI
     provider): `Started(streaming: false)`.
-  - **Structured requests** (a `schema`): `Started(streaming: false)`, until php-agents 0.21
-    brings streamed structured output.
+  - **Structured requests to a provider without structured streaming** (one that does not
+    implement php-agents' `StructuredStreaming`): `Started(streaming: false)`. Every HTTP provider
+    AiConnector builds streams structured output since 1.6.0 (php-agents 0.21).
   - **Rejected-stream fallback:** when the streamed request is rejected as a request-shape error
     (HTTP 400, 404, 405, 415 or 422) before any output, AiConnector makes one blocking call on the
     same attempt and the same charge, and logs it. Not on 401/403/429/5xx, not after output, not
-    after a cancel. The consumer keeps the original `Started(streaming: true)`; no second
-    `Started` is sent.
+    after a cancel. A structured stream falls back to one blocking `structured()` call the same
+    way. The consumer keeps the original `Started(streaming: true)`; no second `Started` is sent.
 
   A structured answer the provider did not finish `stop` ends with the same terminal as a stream
   would (`max_tokens`, `refusal`, `Error(provider_error)`, ...), with no `StructuredDelta` and no
@@ -431,6 +432,14 @@ Before building an `AiRequest`, the host:
   generator, the cancel and the deadline are checked again before a `Progress` or the next
   upstream read. A provider `Finish` read before the deadline stands. Providers that are not an `AbstractProvider` (e.g. php-agents' CLI provider) get
   no request limits from AiConnector, only the before-the-call check.
+- A streamed structured answer (1.6.0+) is `Started(streaming: true)`, the document's fragments as
+  `StructuredDelta` (show them as untrusted progress, never apply them), `Progress` heartbeats, then
+  a `Finish` whose `result` is the whole document decoded, under the same 256 KiB and 64-level
+  rules. The byte cap is checked before each fragment is shown: the fragment that would cross it
+  is dropped, reading stops, and the stream ends `Finish(output_too_large)`. Fragments shown
+  before a `refusal`, `max_tokens` or other non-`stop` finish are not a result.
+- An HTTP error's status is read and its response cancelled: AiConnector never reads an error
+  body (php-agents 0.21 throws a status-only exception for streamed errors).
 - A blocking structured call downloads at most 1 MiB of response; a larger body fails in transport
   (`Error(provider_error)`) before anything is decoded. The document itself is capped at 256 KiB.
 - The attempt is closed (`finished` on any `Finish`, `failed` on an `Error`) before the terminal
@@ -440,7 +449,7 @@ Before building an `AiRequest`, the host:
   document. The 256 KiB cap is measured on the JSON AiConnector re-encodes and emits.
 - A `ToolCallStart` without a matching `ToolCallEnd` means the call was not completed (it was
   dropped for an invalid name or id).
-- Requires the PHP `mbstring` extension (php-agents 0.19 needs it, and so does Kanboard).
+- Requires the PHP `mbstring` extension (php-agents needs it, and so does Kanboard).
 
 ## ModelCatalog API (v1.1.0+)
 

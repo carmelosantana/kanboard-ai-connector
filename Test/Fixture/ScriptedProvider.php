@@ -15,7 +15,7 @@ use CarmeloSantana\PHPAgents\Provider\Response;
  * $calls and $ended are shared with clones (withRequestLimits() returns one), so the test's
  * instance sees what the streamed copy did.
  */
-final class ScriptedProvider extends AbstractProvider
+class ScriptedProvider extends AbstractProvider
 {
     /** @var list<array{method: string, args: array, limits?: RequestLimits}> */
     public array $calls = [];
@@ -48,7 +48,7 @@ final class ScriptedProvider extends AbstractProvider
         return $this->play();
     }
 
-    private function play(): \Generator
+    protected function play(): \Generator
     {
         $how = 'abandoned';
         try {

@@ -5,9 +5,11 @@ namespace Kanboard\Plugin\AiConnector\Stream;
 use Kanboard\Core\Base;
 use Kanboard\Plugin\AiConnector\Model\AiQuota;
 use Kanboard\Plugin\AiConnector\Model\ProviderRegistry;
+use CarmeloSantana\PHPAgents\Contract\StructuredStreaming;
 use CarmeloSantana\PHPAgents\Provider\AbstractProvider;
 use CarmeloSantana\PHPAgents\Provider\RequestLimits;
 use CarmeloSantana\PHPAgents\Provider\Stream\Finish as UpstreamFinish;
+use CarmeloSantana\PHPAgents\Provider\Stream\StructuredDelta as UpstreamStructuredDelta;
 use CarmeloSantana\PHPAgents\Provider\Stream\Tick;
 use CarmeloSantana\PHPAgents\Provider\Stream\ToolInputEnd;
 use CarmeloSantana\PHPAgents\Provider\Stream\ToolInputStart;
@@ -17,6 +19,7 @@ use Kanboard\Plugin\AiConnector\Stream\Event\Progress;
 use Kanboard\Plugin\AiConnector\Stream\Event\ReasoningDelta;
 use Kanboard\Plugin\AiConnector\Stream\Event\Refused;
 use Kanboard\Plugin\AiConnector\Stream\Event\Started;
+use Kanboard\Plugin\AiConnector\Stream\Event\StructuredDelta;
 use Kanboard\Plugin\AiConnector\Stream\Event\Terminal;
 use Kanboard\Plugin\AiConnector\Stream\Event\TextDelta;
 use Kanboard\Plugin\AiConnector\Stream\Internal\BlockingCall;
@@ -202,8 +205,11 @@ class AiStream extends Base
             prepare: fn (object $provider, bool $structured): object => $this->blockingProvider($provider, $structured, $deadline, $request, $userId),
         );
 
-        if ($request->schema !== null) {
-            yield from $this->structured($provider, $blocking, $messages, $request);
+        // A schema request streams when the provider streams structured output (php-agents 0.21);
+        // otherwise it takes one blocking structured() call.
+        $structured = $request->schema !== null;
+        if ($structured && ! ($provider instanceof AbstractProvider && $provider instanceof StructuredStreaming)) {
+            yield from $blocking->structured($provider, $messages, (string) $request->schema, $request->cancel);
             return;
         }
         if (! $provider instanceof AbstractProvider) {
@@ -233,13 +239,17 @@ class AiStream extends Base
         $terminal = null;
         $output = false;
         $rejected = null;
+        $document = '';
+        $upstream = $structured
+            ? $provider->structuredEvents($messages, (string) $request->schema, [])
+            : $provider->streamEvents($messages, [], []);
 
         try {
-            foreach ($provider->streamEvents($messages, [], []) as $event) {
+            foreach ($upstream as $event) {
                 $output = $output || ! $event instanceof Tick;
                 if ($event instanceof UpstreamFinish) {
                     // The provider's last event: take it and stop reading.
-                    $terminal = EventMapper::finish($event, $model);
+                    $terminal = $structured ? $this->documentFinish($event, $document, $model) : EventMapper::finish($event, $model);
                     if ($terminal instanceof Error) {
                         $this->logFailure('provider_error', $userId, $request->feature, 'provider finish error');
                     }
@@ -260,9 +270,23 @@ class AiStream extends Base
                     }
                 }
 
-                $mapped = EventMapper::map($event);
+                if ($event instanceof UpstreamStructuredDelta) {
+                    if (! $structured) {
+                        continue;
+                    }
+                    // The byte cap is checked before the fragment is kept or shown.
+                    if (strlen($document) + strlen($event->delta) > StructuredDecoder::MAX_BYTES) {
+                        $terminal = new Finish('output_too_large', $model, null, null);
+                        break;
+                    }
+                    $document .= $event->delta;
+                }
+
+                $mapped = $event instanceof UpstreamStructuredDelta ? new StructuredDelta($event->delta) : EventMapper::map($event);
                 if ($mapped instanceof TextDelta || $mapped instanceof ReasoningDelta) {
                     $receivedChars += mb_strlen($mapped->text, 'UTF-8');
+                } elseif ($mapped instanceof StructuredDelta) {
+                    $receivedChars += mb_strlen($mapped->json, 'UTF-8');
                 }
                 if ($mapped !== null) {
                     yield $mapped;
@@ -282,12 +306,14 @@ class AiStream extends Base
                 }
             }
         } catch (\Throwable $e) {
+            // Read the status only, and cancel the error response so none of its body is read.
+            $status = EventMapper::httpStatus($e);
             if ($request->cancel?->isCancelled()) {
                 // Cancelled before a Finish arrived: whatever the request then threw, it was cancelled.
                 $terminal = new Finish('cancelled', $model, null, null);
             } else {
                 // Rejected before any output: a protocol fallback, not a retry.
-                $rejected = $output ? null : EventMapper::rejectedStatus($e);
+                $rejected = ! $output && EventMapper::isRejection($status) ? $status : null;
                 $terminal = $rejected === null ? $this->failure($e, $deadline, $request, $userId) : null;
             }
         }
@@ -296,7 +322,9 @@ class AiStream extends Base
             $this->logger->info(sprintf('[AiConnector] AI stream: streaming rejected (HTTP %d), blocking fallback: user %d, feature %s',
                 $rejected, $userId, self::safeFeature($request->feature)));
             // Limited to the time left by blockingProvider(); none left: Error(timeout), no call.
-            yield from $blocking->textAnswer($provider, $messages);
+            yield from $structured
+                ? $blocking->structuredAnswer($provider, $messages, (string) $request->schema)
+                : $blocking->textAnswer($provider, $messages);
             return;
         }
         if ($terminal === null) {
@@ -307,14 +335,20 @@ class AiStream extends Base
     }
 
     /**
-     * The structured path: a request with a schema never goes through streamEvents(). One
-     * blocking structured() call (BlockingCall), limited by blockingProvider() right before it.
-     *
-     * @return \Generator<int, object>
+     * A streamed document's terminal: on the provider's Finish(stop), the buffered fragments
+     * decoded by StructuredDecoder (invalid JSON, too deep, or an empty document is
+     * invalid_output); any other finish is the stream's terminal for it, with no result.
      */
-    private function structured(object $provider, BlockingCall $blocking, array $messages, AiRequest $request): \Generator
+    private function documentFinish(UpstreamFinish $finish, string $document, string $model): Finish|Error
     {
-        yield from $blocking->structured($provider, $messages, (string) $request->schema, $request->cancel);
+        $terminal = EventMapper::finish($finish, $model);
+        if (! $terminal instanceof Finish || $terminal->reason !== 'stop') {
+            return $terminal;
+        }
+        $decoded = StructuredDecoder::decode($document);
+        return $decoded === null || $decoded === []
+            ? new Finish('invalid_output', $model, $terminal->usage, null)
+            : new Finish('stop', $model, $terminal->usage, $decoded);
     }
 
     /**

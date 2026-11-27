@@ -17,6 +17,7 @@ use Kanboard\Plugin\AiConnector\Stream\Event\TextDelta;
 use Kanboard\Plugin\AiConnector\Stream\Event\ToolCallEnd;
 use Kanboard\Plugin\AiConnector\Stream\Event\ToolCallStart;
 use Kanboard\Plugin\AiConnector\Stream\Usage;
+use CarmeloSantana\PHPAgents\Exception\HttpStatusException;
 use Symfony\Contracts\HttpClient\Exception\HttpExceptionInterface;
 use Symfony\Contracts\HttpClient\Exception\TimeoutExceptionInterface;
 use Symfony\Contracts\HttpClient\Exception\TransportExceptionInterface;
@@ -87,22 +88,34 @@ final class EventMapper
     }
 
     /**
-     * The HTTP status of a request-shape rejection (400, 404, 405, 415, 422) found in the
-     * exception chain, or null. Only the status is read, never the body.
+     * The HTTP status of the first HTTP error in the exception chain, or null. Only the status is
+     * read, never the body: php-agents 0.21's status-only exception leaves its response open, so
+     * the response is cancelled here and no body byte is ever read.
      */
-    public static function rejectedStatus(\Throwable $e): ?int
+    public static function httpStatus(\Throwable $e): ?int
     {
         for ($cause = $e; $cause !== null; $cause = $cause->getPrevious()) {
-            if ($cause instanceof HttpExceptionInterface) {
-                try {
-                    $status = $cause->getResponse()->getStatusCode();
-                } catch (\Throwable) {
-                    return null;
-                }
-                return in_array($status, [400, 404, 405, 415, 422], true) ? $status : null;
+            if (! $cause instanceof HttpExceptionInterface) {
+                continue;
             }
+            try {
+                $status = $cause instanceof HttpStatusException ? $cause->getStatusCode() : $cause->getResponse()->getStatusCode();
+            } catch (\Throwable) {
+                $status = null;
+            }
+            try {
+                $cause->getResponse()->cancel();
+            } catch (\Throwable) {
+            }
+            return $status;
         }
         return null;
+    }
+
+    /** Whether $status is a request-shape rejection (400, 404, 405, 415, 422): a fallback, not a failure. */
+    public static function isRejection(?int $status): bool
+    {
+        return in_array($status, [400, 404, 405, 415, 422], true);
     }
 
     /** An Error with its fixed sentence: never a provider's or an exception's text. */
