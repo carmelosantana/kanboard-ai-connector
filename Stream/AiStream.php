@@ -21,6 +21,7 @@ use Kanboard\Plugin\AiConnector\Stream\Event\TextDelta;
 use Kanboard\Plugin\AiConnector\Stream\Internal\BlockingCall;
 use Kanboard\Plugin\AiConnector\Stream\Internal\EventMapper;
 use Kanboard\Plugin\AiConnector\Stream\Internal\MessageMapper;
+use Kanboard\Plugin\AiConnector\Stream\Internal\StructuredDecoder;
 use Pimple\Container;
 
 /**
@@ -161,7 +162,7 @@ class AiStream extends Base
             onException: fn (\Throwable $e): Error => $this->failure($e, $deadline, $request, $userId),
             onFinishError: fn (string $detail) => $this->logFailure('provider_error', $userId, $request->feature, $detail),
             onDroppedTool: fn (int $index) => $this->logDroppedTool($userId, $request->feature, $index),
-            prepare: fn (object $provider, bool $structured): object => $this->blockingProvider($provider, $deadline, $request, $userId),
+            prepare: fn (object $provider, bool $structured): object => $this->blockingProvider($provider, $structured, $deadline, $request, $userId),
         );
 
         if ($request->schema !== null) {
@@ -280,16 +281,17 @@ class AiStream extends Base
     /**
      * BlockingCall's last step before a provider call: past the deadline, the Error that replaces
      * the call; else the provider limited to the time left. A blocking answer sends nothing until
-     * it is done, so idle = max = the time left. A provider that is not an AbstractProvider takes
-     * no limits.
+     * it is done, so idle = max = the time left. A structured call's body is capped at
+     * StructuredDecoder::MAX_RESPONSE_BYTES, so an oversized document fails in transport before
+     * it is decoded. A provider that is not an AbstractProvider takes no limits.
      */
-    private function blockingProvider(object $provider, float $deadline, AiRequest $request, int $userId): object
+    private function blockingProvider(object $provider, bool $structured, float $deadline, AiRequest $request, int $userId): object
     {
         $remaining = $this->remaining($deadline);
         if ($remaining <= 0.0) {
             return $this->deadlinePassed($request, $userId);
         }
-        return $provider instanceof AbstractProvider ? $provider->withRequestLimits(self::blockingLimits($remaining)) : $provider;
+        return $provider instanceof AbstractProvider ? $provider->withRequestLimits(self::blockingLimits($remaining, $structured)) : $provider;
     }
 
     /** Seconds left before the deadline; zero or less once it has passed. */
@@ -306,9 +308,11 @@ class AiStream extends Base
     }
 
     /** Limits for one blocking call: no bytes arrive until it is done, so idle = max = $seconds. */
-    private static function blockingLimits(float $seconds): RequestLimits
+    private static function blockingLimits(float $seconds, bool $structured): RequestLimits
     {
-        return new RequestLimits(idleTimeout: $seconds, maxDuration: $seconds, tickInterval: 0.25);
+        return $structured
+            ? new RequestLimits(idleTimeout: $seconds, maxDuration: $seconds, maxResponseBytes: StructuredDecoder::MAX_RESPONSE_BYTES, tickInterval: 0.25)
+            : new RequestLimits(idleTimeout: $seconds, maxDuration: $seconds, tickInterval: 0.25);
     }
 
     /** A thrown request as its Error, logged by class: a transport failure at the deadline is a timeout. */

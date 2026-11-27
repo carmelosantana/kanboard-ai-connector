@@ -158,18 +158,21 @@ final class BlockingCall
         }
 
         $usageOut = EventMapper::usage(self::usageOf($usage->report, $raw instanceof Response ? $raw->usage : null));
-        $content = match (true) {
-            $raw instanceof Response => $raw->content,
-            is_string($raw) => $raw,
-            default => (string) json_encode($raw),
-        };
-        if (strlen($content) > StructuredDecoder::MAX_BYTES) {
-            yield new Finish('output_too_large', $this->model, $usageOut, null);
-            return;
+        if ($raw instanceof Response || is_string($raw)) {
+            // JSON text: the size cap before decoding, then the decoded document re-encoded.
+            $content = $raw instanceof Response ? $raw->content : $raw;
+            if (strlen($content) > StructuredDecoder::MAX_BYTES) {
+                yield new Finish('output_too_large', $this->model, $usageOut, null);
+                return;
+            }
+            $decoded = StructuredDecoder::decode($content) ?? [];
+            $json = $decoded !== [] ? (string) json_encode($decoded) : $content;
+        } else {
+            // An array the provider already decoded (its body was capped in transport): checked
+            // for depth, then encoded once, which is both the size measure and the delta.
+            $decoded = StructuredDecoder::normalize($raw);
+            $json = (string) json_encode($raw);
         }
-
-        $decoded = is_string($raw) ? (StructuredDecoder::decode($raw) ?? []) : StructuredDecoder::normalize($raw);
-        $json = $decoded !== [] ? (string) json_encode($decoded) : $content;
         if (strlen($json) > StructuredDecoder::MAX_BYTES) {
             yield new Finish('output_too_large', $this->model, $usageOut, null);
             return;

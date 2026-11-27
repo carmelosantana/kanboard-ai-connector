@@ -140,8 +140,18 @@ class AiStreamStructuredBlockingTest extends Base
         $this->assertCount(1, $call['args'][0]);
         $this->assertInstanceOf(UserMessage::class, $call['args'][0][0]);
         $this->assertSame([], $call['args'][2], 'no options');
-        $this->assertEquals(new RequestLimits(idleTimeout: 90.0, maxDuration: 90.0, tickInterval: 0.25), $call['limits'],
-            'a blocking answer sends nothing until done: idle = max = the request maximum');
+        $this->assertEquals(new RequestLimits(idleTimeout: 90.0, maxDuration: 90.0, maxResponseBytes: 1048576, tickInterval: 0.25), $call['limits'],
+            'a blocking answer sends nothing until done: idle = max = the request maximum; the body is capped at 1 MiB');
+    }
+
+    public function testStructuredResponseBodyIsCappedInTransport(): void
+    {
+        // 1 MiB of raw response, four times the 256 KiB document cap: an oversized body fails
+        // while downloading, before anything is decoded.
+        $provider = self::scripted(['title' => 'Hi']);
+        $this->drain($provider);
+        $this->assertSame(1048576, $provider->calls[0]['limits']->maxResponseBytes);
+        // The text fallback keeps php-agents' default cap (AiStreamBlockingTest asserts its limits).
     }
 
     public function testBlockingLimitsCountFromTheReservation(): void
