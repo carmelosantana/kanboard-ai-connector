@@ -11,6 +11,9 @@ All notable changes to AiConnector will be documented here.
 - A third AI limit, **AI requests running at once per person** (default 3, ceiling 20), in **Settings → AI Connector → AI Limits**.
 - Cancellation through the `AiCancellation` interface, with idle and total time limits per request.
 - A new `aiconnector_attempts` table (kept 24 hours).
+- Structured requests (`AiRequest` with a schema) answer through one blocking `structured()` call for now, with the provider's response held to 1 MiB and the emitted document to 256 KiB and 64 levels. A streamed structured answer is planned with php-agents 0.21.
+- A request's total time limit counts from its reservation, including time the host spends between events; no provider call starts after it.
+- php-agents 0.19 (from 0.17), which needs the PHP mbstring extension.
 
 ### Changed
 - A failed reservation now logs a distinct reason with the exception's class name (never its message).
