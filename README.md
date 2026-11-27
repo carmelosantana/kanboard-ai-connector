@@ -438,6 +438,9 @@ Before building an `AiRequest`, the host:
   rules. The byte cap is checked before each fragment is shown: the fragment that would cross it
   is dropped, reading stops, and the stream ends `Finish(output_too_large)`. Fragments shown
   before a `refusal`, `max_tokens` or other non-`stop` finish are not a result.
+  OpenAI Responses checks its forced-function arguments itself and reports malformed or
+  over-deep output as a provider error, so there the stream ends `Error(provider_error)` where
+  other providers end `Finish(invalid_output)`; neither carries a result.
 - An HTTP error's status is read and its response cancelled: AiConnector never reads an error
   body (php-agents 0.21 throws a status-only exception for streamed errors).
 - A blocking structured call downloads at most 1 MiB of response; a larger body fails in transport

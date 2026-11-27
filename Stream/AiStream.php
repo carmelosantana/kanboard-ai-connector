@@ -240,11 +240,13 @@ class AiStream extends Base
         $output = false;
         $rejected = null;
         $document = '';
-        $upstream = $structured
-            ? $provider->structuredEvents($messages, (string) $request->schema, [])
-            : $provider->streamEvents($messages, [], []);
+        $upstream = null;
 
         try {
+            // Created inside the try: a provider that prepares the request eagerly can throw here.
+            $upstream = $structured
+                ? $provider->structuredEvents($messages, (string) $request->schema, [])
+                : $provider->streamEvents($messages, [], []);
             foreach ($upstream as $event) {
                 $output = $output || ! $event instanceof Tick;
                 if ($event instanceof UpstreamFinish) {
@@ -317,6 +319,11 @@ class AiStream extends Base
                 $terminal = $rejected === null ? $this->failure($e, $deadline, $request, $userId) : null;
             }
         }
+        // Release the provider's stream before anything else reaches the host: destroying the
+        // php-agents generator cancels its HTTP request, so a host that keeps this generator after
+        // the terminal holds no open connection (its attempt is already closed).
+        $upstream = null;
+        unset($e);
 
         if ($rejected !== null) {
             $this->logger->info(sprintf('[AiConnector] AI stream: streaming rejected (HTTP %d), blocking fallback: user %d, feature %s',

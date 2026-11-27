@@ -358,4 +358,47 @@ class AiStreamStructuredTest extends Base
         $this->assertSame('provider_error', end($events)->code);
         $this->assertSame(['structuredEvents'], array_column($provider->calls, 'method'));
     }
+
+    /** The host stops at the terminal and keeps the generator: the provider stream must already be closed. */
+    private function endedAtTheTerminal(StructuredScriptedProvider $provider, ?AiCancellation $cancel = null, ?\Closure $onDelta = null): ?string
+    {
+        $generator = $this->events($provider, cancel: $cancel);
+        foreach ($generator as $event) {
+            if ($event instanceof StructuredDelta && $onDelta !== null) {
+                $onDelta();
+            }
+            if ($event instanceof \Kanboard\Plugin\AiConnector\Stream\Event\Terminal) {
+                return $provider->ended;
+            }
+        }
+        return 'no terminal';
+    }
+
+    public function testTheUpstreamIsClosedBeforeTheTerminalReachesTheHost(): void
+    {
+        $chunk = str_repeat('x', 200_000);
+        $this->assertSame('abandoned', $this->endedAtTheTerminal(self::provider(self::document('{"t":"', $chunk, $chunk, '"}'))), 'byte cap');
+
+        $cancel = $this->cancellation();
+        $this->container['db']->table(AiQuota::ATTEMPTS_TABLE)->remove();
+        $this->assertSame('abandoned', $this->endedAtTheTerminal(self::provider(self::document('{"t":', '1}')), $cancel,
+            fn () => $cancel->cancelled = true), 'cancel');
+
+        $this->container['db']->table(AiQuota::ATTEMPTS_TABLE)->remove();
+        $this->assertSame('abandoned', $this->endedAtTheTerminal(self::provider(self::document('{"t":', '1}')), null,
+            fn () => $this->now = 300.0), 'deadline');
+    }
+
+    public function testASynchronousThrowFromStructuredEventsEndsWithOneError(): void
+    {
+        $provider = self::provider([]);
+        $provider->throwOnCall = new \TypeError('schema must be an array');
+        $events = $this->drain($provider);
+        $this->assertSame(['Started', 'Error'], self::shape($events));
+        $this->assertSame('provider_error', end($events)->code);
+        $this->assertSame('failed', $this->attemptStatus());
+        foreach ($this->logged as $line) {
+            $this->assertStringNotContainsString('schema must be', $line);
+        }
+    }
 }

@@ -680,4 +680,20 @@ class AiStreamTextTest extends Base
             $this->assertStringNotContainsString('ollama-secret-host', $line);
         }
     }
+
+    public function testATextStreamIsClosedBeforeItsTerminalReachesTheHost(): void
+    {
+        $cancel = $this->cancellation();
+        $provider = new ScriptedProvider([new UpText('a'), new UpText('b'), self::finish()]);
+        foreach ($this->stream($provider, $cancel) as $event) {
+            if ($event instanceof TextDelta) {
+                $cancel->cancelled = true;
+            }
+            if ($event instanceof Finish) {
+                $this->assertSame('abandoned', $provider->ended, 'closed before the host sees Finish(cancelled)');
+                return;
+            }
+        }
+        $this->fail('no Finish');
+    }
 }
