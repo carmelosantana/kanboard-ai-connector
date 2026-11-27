@@ -219,10 +219,11 @@ final class AiQuota
             if ($attemptKey === null) {
                 throw $e;
             }
+            // Defensive backstop: PicoDb usually wraps errors or returns false, so this rarely runs.
             if ($e instanceof \PDOException && in_array((string) $e->getCode(), ['23000', '23505'], true)) {
                 return $this->duplicate($userId, $feature);
             }
-            return $this->unavailable($userId, $feature);
+            return $this->unavailable($userId, $feature, 'reservation failed: ' . (new \ReflectionClass($e))->getShortName());
         }
         return new Reservation(Reservation::OK, null, $attemptId === null ? null : (int) $attemptId);
     }
@@ -233,9 +234,9 @@ final class AiQuota
         return new Reservation(Reservation::DUPLICATE_ATTEMPT, t('This AI request was already sent.'));
     }
 
-    private function unavailable(int $userId, string $feature): Reservation
+    private function unavailable(int $userId, string $feature, string $reason = 'count not stored'): Reservation
     {
-        $this->log($userId, $feature, 'count not stored');
+        $this->log($userId, $feature, $reason);
         return new Reservation(Reservation::UNAVAILABLE, t('AI is unavailable right now. Try again later.'));
     }
 

@@ -248,6 +248,49 @@ class AiQuotaReserveTest extends Base
         $this->assertTrue($this->reserve('k1')->ok(), 'the connection still works');
     }
 
+    public function testAFailedReservationLogsTheExceptionClassNotItsMessage(): void
+    {
+        $real = $this->container['db'];
+        $this->container['db'] = new class($real) {
+            public function __construct(private $db) {}
+
+            public function table($name)
+            {
+                if ($name !== 'aiconnector_attempts') {
+                    return $this->db->table($name);
+                }
+                return new class($this->db, $name) extends \PicoDb\Table {
+                    public function persist(array $data)
+                    {
+                        throw new \UnexpectedValueException('secret-host db1.internal password=hunter2');
+                    }
+                };
+            }
+
+            public function __call($method, $args)
+            {
+                return $this->db->$method(...$args);
+            }
+        };
+        $logger = new class {
+            public array $lines = [];
+            public function info($line) { $this->lines[] = $line; }
+            public function debug($line) {}
+        };
+        $realLogger = $this->container['logger'];
+        $this->container['logger'] = $logger;
+
+        $r = $this->reserve('k1');
+        $this->container['db'] = $real;
+        $this->container['logger'] = $realLogger;
+
+        $this->assertSame(Reservation::UNAVAILABLE, $r->outcome);
+        $log = implode("\n", $logger->lines);
+        $this->assertStringContainsString('UnexpectedValueException', $log);
+        $this->assertStringNotContainsString('hunter2', $log);
+        $this->assertStringNotContainsString('db1.internal', $log);
+    }
+
     public function testConsumeIsUnchangedAndOpensNoAttempt(): void
     {
         $this->assertNull($this->quota()->consume($this->ana, 'summary', 'x'));
