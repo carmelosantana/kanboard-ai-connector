@@ -55,8 +55,20 @@ class AiStream extends Base
         $this->registry = $registry;
     }
 
-    /** @return \Generator<int, object> events, ending with exactly one terminal event when drained */
+    /**
+     * The signed-in user is read here, when events() is called, not when the generator first
+     * runs: a generator built for one person and iterated under another session still acts for
+     * the person who asked.
+     *
+     * @return \Generator<int, object> events, ending with exactly one terminal event when drained
+     */
     public function events(AiRequest $request): \Generator
+    {
+        return $this->run($request, (int) $this->userSession->getId());
+    }
+
+    /** @return \Generator<int, object> */
+    private function run(AiRequest $request, int $userId): \Generator
     {
         $registry = $this->registry ?? new ProviderRegistry($this->container);
         $feature = $request->feature;
@@ -66,7 +78,6 @@ class AiStream extends Base
             return;
         }
 
-        $userId = (int) $this->userSession->getId();
         if ($userId <= 0) {
             yield $this->refuse('not_signed_in', 0, $feature);
             return;

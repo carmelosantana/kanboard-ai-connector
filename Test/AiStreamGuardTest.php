@@ -415,4 +415,27 @@ class AiStreamGuardTest extends Base
         $this->assertSame(0, $quota->usedThisHour($this->ana));
         $this->assertSame($this->bob, (int) $this->container['db']->table(AiQuota::ATTEMPTS_TABLE)->findOneColumn('user_id'));
     }
+
+    public function testUserIsBoundWhenEventsIsCalledNotWhenIterated(): void
+    {
+        $registry = new ProviderRegistry($this->container);
+        $registry->setProviderForTesting($this->provider);
+        $stream = new AiStream($this->container);
+        $stream->setRegistryForTesting($registry);
+
+        $built = $stream->events($this->request(key: 'k1')); // built for ana
+        $this->signIn($this->bob);                            // the session changes before iteration
+        $this->assertInstanceOf(Started::class, iterator_to_array($built, false)[0]);
+        $quota = new AiQuota($this->container);
+        $this->assertSame(1, $quota->usedThisHour($this->ana), 'charged to the person who asked');
+        $this->assertSame(0, $quota->usedThisHour($this->bob));
+        $this->assertSame($this->ana, (int) $this->container['db']->table(AiQuota::ATTEMPTS_TABLE)->findOneColumn('user_id'));
+
+        $this->provider->calls = [];
+        unset($_SESSION['user']);
+        $anonymous = $stream->events($this->request(key: 'k2')); // built with nobody signed in
+        $this->signIn($this->ana);
+        $this->assertRefused(iterator_to_array($anonymous, false), 'not_signed_in');
+        $this->assertSame(1, $quota->usedThisHour($this->ana), 'nothing more counted');
+    }
 }
