@@ -20,7 +20,7 @@ class PluginTest extends Base
         $this->assertSame('AiConnector', $plugin->getPluginName());
         $json = json_decode(file_get_contents(dirname(__DIR__) . '/plugin.json'), true);
         $this->assertSame($json['version'], $plugin->getPluginVersion(), 'getPluginVersion() must match plugin.json version');
-        $this->assertSame('1.4.0', $json['version'], 'model routing ships in 1.4.0');
+        $this->assertSame('1.5.0', $json['version'], 'streaming ships in 1.5.0');
         $this->assertNotEmpty($plugin->getPluginDescription());
         $this->assertSame('Carmelo Santana', $plugin->getPluginAuthor());
         $this->assertNotEmpty($plugin->getPluginHomepage());
