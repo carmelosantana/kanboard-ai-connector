@@ -3,6 +3,7 @@
 require_once 'tests/units/Base.php';
 
 use Kanboard\Plugin\AiConnector\Stream\AiRequest;
+use Kanboard\Plugin\AiConnector\Stream\AiStream;
 use Kanboard\Plugin\AiConnector\Stream\Event\Error;
 use Kanboard\Plugin\AiConnector\Stream\Event\Finish;
 use Kanboard\Plugin\AiConnector\Stream\Event\Refused;
@@ -147,5 +148,29 @@ class StreamTypesTest extends Base
             $this->assertFileExists($file);
             $this->assertStringNotContainsString('PHPAgents', file_get_contents($file), $file);
         }
+    }
+
+    public function testAiStreamPublicSignaturesNameNoPhpAgentsType(): void
+    {
+        $names = static function (?\ReflectionType $type) use (&$names): array {
+            return match (true) {
+                $type === null => [],
+                $type instanceof \ReflectionNamedType => [$type->getName()],
+                default => array_merge(...array_map($names, $type->getTypes())),
+            };
+        };
+
+        $checked = 0;
+        foreach ((new \ReflectionClass(AiStream::class))->getMethods(\ReflectionMethod::IS_PUBLIC) as $method) {
+            $types = $names($method->getReturnType());
+            foreach ($method->getParameters() as $param) {
+                $types = array_merge($types, $names($param->getType()));
+            }
+            foreach ($types as $type) {
+                $checked++;
+                $this->assertStringStartsNotWith('CarmeloSantana\\', ltrim($type, '\\'), $method->class . '::' . $method->getName());
+            }
+        }
+        $this->assertGreaterThan(0, $checked, 'some public signature types were checked');
     }
 }
