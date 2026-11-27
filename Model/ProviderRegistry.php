@@ -8,7 +8,7 @@ use CarmeloSantana\PHPAgents\Contract\ProviderInterface;
 use CarmeloSantana\PHPAgents\Message\SystemMessage;
 use CarmeloSantana\PHPAgents\Message\UserMessage;
 use CarmeloSantana\PHPAgents\Message\AssistantMessage;
-use CarmeloSantana\PHPAgents\Provider\Response;
+use Kanboard\Plugin\AiConnector\Stream\Internal\StructuredDecoder;
 use CarmeloSantana\PHPAgents\Provider\AnthropicProvider;
 use CarmeloSantana\PHPAgents\Provider\OpenAICompatibleProvider;
 use CarmeloSantana\PHPAgents\Provider\OpenAIResponsesProvider;
@@ -515,14 +515,7 @@ class ProviderRegistry extends Base
      */
     private function normalizeStructuredResult(mixed $raw): array
     {
-        if (is_array($raw)) {
-            return $raw;
-        }
-        if ($raw instanceof Response) {
-            $decoded = json_decode($raw->content, true);
-            return is_array($decoded) ? $decoded : [];
-        }
-        return [];
+        return StructuredDecoder::normalize($raw);
     }
 
     /** '' (use the default), or an absolute http(s) URL with a host and no credentials. */
