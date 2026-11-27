@@ -186,15 +186,28 @@ class ProviderRegistry extends Base
     public function isReady(): bool
     {
         foreach ($this->getProfiles() as $p) {
-            if (in_array($p['provider'], self::KEYLESS, true)) {
-                return true;
-            }
-            $stored = (string) $this->configModel->get(self::KEY_PREFIX . $p['id'], '');
-            if ($this->resolveKey($p['provider'], $stored) !== '') {
+            if ($this->profileReady($p['id'])) {
                 return true;
             }
         }
         return false;
+    }
+
+    /**
+     * True when profile $id exists and has a resolvable key (stored/env) or is keyless.
+     * No network call.
+     */
+    public function profileReady(string $id): bool
+    {
+        $p = $this->findProfile($id);
+        if ($p === null) {
+            return false;
+        }
+        if (in_array($p['provider'], self::KEYLESS, true)) {
+            return true;
+        }
+        $stored = (string) $this->configModel->get(self::KEY_PREFIX . $p['id'], '');
+        return $this->resolveKey($p['provider'], $stored) !== '';
     }
 
     /**

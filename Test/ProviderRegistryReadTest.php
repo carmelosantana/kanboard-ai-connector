@@ -51,6 +51,31 @@ class ProviderRegistryReadTest extends Base
         $this->assertFalse($this->registry()->findProfile('p2')['available']);
     }
 
+    public function testProfileReady(): void
+    {
+        $this->clearEnv();
+        $this->seedProfiles([
+            ['id' => 'local', 'label' => 'L', 'provider' => 'ollama', 'model' => 'm', 'base_url' => ''],
+            ['id' => 'stored', 'label' => 'S', 'provider' => 'anthropic', 'model' => 'm', 'base_url' => ''],
+            ['id' => 'env', 'label' => 'E', 'provider' => 'mistral', 'model' => 'm', 'base_url' => ''],
+            ['id' => 'none', 'label' => 'N', 'provider' => 'gemini', 'model' => 'm', 'base_url' => ''],
+        ], 'local');
+        $this->seed(ProviderRegistry::KEY_PREFIX . 'stored', 'k');
+        $registry = $this->registry();
+
+        $this->assertTrue($registry->profileReady('local'));
+        $this->assertTrue($registry->profileReady('stored'));
+        $this->assertFalse($registry->profileReady('env'));
+        putenv('MISTRAL_API_KEY=from-env');
+        try {
+            $this->assertTrue($registry->profileReady('env'));
+        } finally {
+            putenv('MISTRAL_API_KEY=');
+        }
+        $this->assertFalse($registry->profileReady('none'));
+        $this->assertFalse($registry->profileReady('ghost'));
+    }
+
     public function testListProfilesEmptyWhenNoneConfigured(): void
     {
         $this->assertSame([], $this->registry()->listProfiles());
