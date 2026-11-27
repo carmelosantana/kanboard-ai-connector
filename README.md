@@ -329,9 +329,12 @@ Feature-detect with `class_exists(AiStream::class)` and keep streaming off witho
 `events()` never throws for what a request or a provider does; it throws
 `InvalidArgumentException` only for programmer errors (malformed messages or attempt key,
 schema text that is not JSON), and `LogicException` inside a database transaction.
-`AiRequest` takes no user id: the signed-in user is read from the session. `idleTimeout`
-(default 60 s, clamped to 1-120) and `maxDuration` (default 300 s, clamped to 1-600)
-bound a request. Pass an `AiCancellation` (`isCancelled(): bool`) to let the person stop it.
+`AiRequest` takes no user id: the signed-in user is read from the session when `events()` is
+called, not when the generator is first iterated. `idleTimeout` (default 60 s, clamped to 1-120)
+and `maxDuration` (default 300 s, clamped to 1-600) bound a request. A stream ends with
+`Error(timeout)` once `maxDuration` has passed, measured from the reservation, including the time
+the consumer spends between events. Pass an `AiCancellation` (`isCancelled(): bool`) to let the
+person stop it.
 
 ### Events
 
@@ -373,7 +376,7 @@ or null. `message` is a fixed translated sentence; real errors go to the log onl
 | Provider finished: stop, tool use, max tokens, refusal, content filter, context window exceeded | `Finish(stop / tool_use / max_tokens / refusal / content_filter / context_window_exceeded)` |
 | Provider paused the turn | `Finish(incomplete)` |
 | Provider error, premature end of stream, tool-call overflow | `Error(provider_error)` |
-| Idle or total time limit passed | `Error(timeout)` |
+| Idle limit passed, or `maxDuration` passed since the reservation (consumer time between events included) | `Error(timeout)` |
 | Transport or HTTP failure, anything else | `Error(provider_error)` |
 | The stream ends with no finish | `Error(provider_error)` |
 | Cancelled before a finish arrives | `Finish(cancelled)` |
@@ -419,9 +422,16 @@ Before building an `AiRequest`, the host:
   A structured answer the provider did not finish `stop` ends with the same terminal as a stream
   would (`max_tokens`, `refusal`, `Error(provider_error)`, ...), with no `StructuredDelta` and no
   `result`.
-- `idleTimeout` and `maxDuration` are enforced through php-agents' `AbstractProvider` request
-  limits. Providers that are not an `AbstractProvider` (e.g. php-agents' CLI provider) get no request time
-  limits from AiConnector.
+- The deadline is the reservation time plus `maxDuration`. Every provider call is limited to the
+  time left before it (a stream's idle limit is `idleTimeout` or the time left, whichever is less; a
+  blocking call's idle and total limits are both the time left), and a call that would start after
+  the deadline is not made: `Error(timeout)`. AiStream also checks the deadline on every upstream
+  event, ticks included, and stops reading with `Error(timeout)`, so a consumer that holds the
+  generator between events spends its own request's time. A provider `Finish` read before the
+  deadline stands. Providers that are not an `AbstractProvider` (e.g. php-agents' CLI provider) get
+  no request limits from AiConnector, only the before-the-call check.
+- A blocking structured call downloads at most 1 MiB of response; a larger body fails in transport
+  (`Error(provider_error)`) before anything is decoded. The document itself is capped at 256 KiB.
 - A `ToolCallStart` without a matching `ToolCallEnd` means the call was not completed (it was
   dropped for an invalid name or id).
 - Requires the PHP `mbstring` extension (php-agents 0.19 needs it, and so does Kanboard).
