@@ -357,6 +357,40 @@ class AiStreamGuardTest extends Base
         $this->assertSame('finished', $row['status']);
     }
 
+    public function testConfiguredModelIsResolvedBeforeTheReservation(): void
+    {
+        // A profile store that fails once the provider is built: the model lookup must run
+        // before reserve(), so a throw there leaves nothing charged and no attempt open.
+        $registry = new class($this->container) extends ProviderRegistry {
+            private bool $built = false;
+            public function buildProvider(?string $profileId = null): \CarmeloSantana\PHPAgents\Contract\ProviderInterface
+            {
+                $provider = parent::buildProvider($profileId);
+                $this->built = true;
+                return $provider;
+            }
+            public function findProfile(string $id): ?array
+            {
+                if ($this->built) {
+                    throw new \RuntimeException('profile store failed');
+                }
+                return parent::findProfile($id);
+            }
+        };
+        $registry->setProviderForTesting($this->provider);
+        $stream = new AiStream($this->container);
+        $stream->setRegistryForTesting($registry);
+
+        try {
+            iterator_to_array($stream->events($this->request()), false);
+            $this->fail('the store failure propagates');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('profile store failed', $e->getMessage());
+        }
+        $this->assertSame([], $this->provider->calls, 'no provider call');
+        $this->assertUncharged();
+    }
+
     public function testRoutingRunsFreshForEveryRequest(): void
     {
         $meta = $this->container['projectMetadataModel'];

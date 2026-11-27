@@ -95,6 +95,10 @@ class AiStream extends Base
             return;
         }
 
+        // Resolved before the reservation: nothing after reserve() may throw outside stream()'s catch.
+        $profile = $registry->findProfile($profileId) ?? ['provider' => '', 'model' => ''];
+        $model = $profile['model'] !== '' ? $profile['model'] : (ProviderRegistry::DEFAULT_MODELS[$profile['provider']] ?? '');
+
         $input = array_column($request->messages, 'content');
         if ($request->schema !== null) {
             $input[] = $request->schema;
@@ -109,8 +113,6 @@ class AiStream extends Base
 
         $finished = false;
         try {
-            $profile = $registry->findProfile($profileId) ?? ['provider' => '', 'model' => ''];
-            $model = $profile['model'] !== '' ? $profile['model'] : (ProviderRegistry::DEFAULT_MODELS[$profile['provider']] ?? '');
             foreach ($this->stream($provider, $request, $model, $userId) as $event) {
                 $finished = $event instanceof Finish;
                 yield $event;
