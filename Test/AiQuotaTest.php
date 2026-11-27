@@ -39,7 +39,7 @@ class AiQuotaTest extends Base
 
     public function testDefaultsAreThirtyRequestsAnHourAndThirtyTwoThousandCharacters(): void
     {
-        $this->assertSame([AiQuota::REQUESTS_PER_HOUR => 30, AiQuota::MAX_INPUT_CHARS => 32000], $this->quota()->values());
+        $this->assertSame([AiQuota::REQUESTS_PER_HOUR => 30, AiQuota::MAX_INPUT_CHARS => 32000, AiQuota::MAX_CONCURRENT => 3], $this->quota()->values());
     }
 
     public function testStoredValuesThatAreNotPositiveWholeNumbersReadAsTheDefault(): void
@@ -125,19 +125,19 @@ class AiQuotaTest extends Base
     public function testSaveStoresWholeNumbersOfOneOrMore(): void
     {
         $quota = $this->quota();
-        $this->assertSame([], $quota->save([AiQuota::REQUESTS_PER_HOUR => ' 12 ', AiQuota::MAX_INPUT_CHARS => '5000']));
+        $this->assertSame([], $quota->save([AiQuota::REQUESTS_PER_HOUR => ' 12 ', AiQuota::MAX_INPUT_CHARS => '5000', AiQuota::MAX_CONCURRENT => '4']));
         $this->container['memoryCache']->flush();
-        $this->assertSame([AiQuota::REQUESTS_PER_HOUR => 12, AiQuota::MAX_INPUT_CHARS => 5000], $this->quota()->values());
+        $this->assertSame([AiQuota::REQUESTS_PER_HOUR => 12, AiQuota::MAX_INPUT_CHARS => 5000, AiQuota::MAX_CONCURRENT => 4], $this->quota()->values());
     }
 
     public function testSaveRejectsBadValuesAndSavesNothing(): void
     {
-        $errors = $this->quota()->save([AiQuota::REQUESTS_PER_HOUR => '0', AiQuota::MAX_INPUT_CHARS => '5000']);
+        $errors = $this->quota()->save([AiQuota::REQUESTS_PER_HOUR => '0', AiQuota::MAX_INPUT_CHARS => '5000', AiQuota::MAX_CONCURRENT => '3']);
         $this->assertArrayHasKey(AiQuota::REQUESTS_PER_HOUR, $errors);
         $this->container['memoryCache']->flush();
         $this->assertSame(32000, $this->quota()->maxInputChars());
 
-        $errors = $this->quota()->save([AiQuota::REQUESTS_PER_HOUR => '5', AiQuota::MAX_INPUT_CHARS => '9999999999']);
+        $errors = $this->quota()->save([AiQuota::REQUESTS_PER_HOUR => '5', AiQuota::MAX_INPUT_CHARS => '9999999999', AiQuota::MAX_CONCURRENT => '3']);
         $this->assertArrayHasKey(AiQuota::MAX_INPUT_CHARS, $errors);
         $errors = $this->quota()->save([AiQuota::REQUESTS_PER_HOUR => '5']);
         $this->assertArrayHasKey(AiQuota::MAX_INPUT_CHARS, $errors);
@@ -192,13 +192,25 @@ class AiQuotaTest extends Base
     public function testBothLimitsHaveACeiling(): void
     {
         $quota = $this->quota();
-        $this->assertSame([], $quota->save([AiQuota::REQUESTS_PER_HOUR => '10000', AiQuota::MAX_INPUT_CHARS => '1000000']));
-        $this->assertArrayHasKey(AiQuota::REQUESTS_PER_HOUR, $quota->save([AiQuota::REQUESTS_PER_HOUR => '10001', AiQuota::MAX_INPUT_CHARS => '5000']));
-        $this->assertArrayHasKey(AiQuota::MAX_INPUT_CHARS, $quota->save([AiQuota::REQUESTS_PER_HOUR => '5', AiQuota::MAX_INPUT_CHARS => '1000001']));
+        $this->assertSame([], $quota->save([AiQuota::REQUESTS_PER_HOUR => '10000', AiQuota::MAX_INPUT_CHARS => '1000000', AiQuota::MAX_CONCURRENT => '20']));
+        $this->assertArrayHasKey(AiQuota::REQUESTS_PER_HOUR, $quota->save([AiQuota::REQUESTS_PER_HOUR => '10001', AiQuota::MAX_INPUT_CHARS => '5000', AiQuota::MAX_CONCURRENT => '3']));
+        $this->assertArrayHasKey(AiQuota::MAX_INPUT_CHARS, $quota->save([AiQuota::REQUESTS_PER_HOUR => '5', AiQuota::MAX_INPUT_CHARS => '1000001', AiQuota::MAX_CONCURRENT => '3']));
 
         // A stored value above the ceiling (set before 1.3.0's checks, or by hand) reads as the default.
         $this->setting(AiQuota::REQUESTS_PER_HOUR, '999999999');
         $this->setting(AiQuota::MAX_INPUT_CHARS, '999999999');
-        $this->assertSame([AiQuota::REQUESTS_PER_HOUR => 30, AiQuota::MAX_INPUT_CHARS => 32000], $this->quota()->values());
+        $this->setting(AiQuota::MAX_CONCURRENT, '999999999');
+        $this->assertSame([AiQuota::REQUESTS_PER_HOUR => 30, AiQuota::MAX_INPUT_CHARS => 32000, AiQuota::MAX_CONCURRENT => 3], $this->quota()->values());
+    }
+
+    public function testMaxConcurrentRejectsZeroAndAboveTwenty(): void
+    {
+        $ok = [AiQuota::REQUESTS_PER_HOUR => '5', AiQuota::MAX_INPUT_CHARS => '5000'];
+        $quota = $this->quota();
+        $this->assertArrayHasKey(AiQuota::MAX_CONCURRENT, $quota->save($ok + [AiQuota::MAX_CONCURRENT => '0']));
+        $this->assertArrayHasKey(AiQuota::MAX_CONCURRENT, $quota->save($ok + [AiQuota::MAX_CONCURRENT => '21']));
+        $this->assertSame([], $quota->save($ok + [AiQuota::MAX_CONCURRENT => '20']));
+        $this->container['memoryCache']->flush();
+        $this->assertSame(20, $this->quota()->maxConcurrent());
     }
 }

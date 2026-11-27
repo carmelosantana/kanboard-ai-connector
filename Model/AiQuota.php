@@ -18,8 +18,8 @@ namespace Kanboard\Plugin\AiConnector\Model;
  * a caller's transaction consume() throws instead, since a rollback would erase the count.
  * An unknown user id is refused, and so is a request whose count could not be stored.
  *
- * Both limits are admin settings in `settings`; a stored value that is missing, not a whole
- * number of 1 or more, or above its ceiling reads as the default, so neither limit can be
+ * The limits are admin settings in `settings`; a stored value that is missing, not a whole
+ * number of 1 or more, or above its ceiling reads as the default, so no limit can be
  * switched off.
  *
  * Consumers feature-detect this class (class_exists) and keep AI off when it is missing.
@@ -30,23 +30,27 @@ final class AiQuota
     public const LOCK_TABLE = 'aiconnector_quota_users';
     public const REQUESTS_PER_HOUR = 'aiconnector_requests_per_hour';
     public const MAX_INPUT_CHARS = 'aiconnector_max_input_chars';
+    public const MAX_CONCURRENT = 'aiconnector_max_concurrent';
     public const WINDOW_SECONDS = 3600;
 
     /** Every limit with its label (translated where shown), in the settings form's order. */
     public const FIELDS = [
         self::REQUESTS_PER_HOUR => 'AI requests per person per hour',
         self::MAX_INPUT_CHARS => 'Longest AI request (characters)',
+        self::MAX_CONCURRENT => 'AI requests running at once per person',
     ];
 
     private const DEFAULTS = [
         self::REQUESTS_PER_HOUR => 30,
         self::MAX_INPUT_CHARS => 32000,
+        self::MAX_CONCURRENT => 3,
     ];
 
     /** The highest value each limit accepts, so neither can be set high enough to mean "off". */
     public const CEILINGS = [
         self::REQUESTS_PER_HOUR => 10000,
         self::MAX_INPUT_CHARS => 1000000,
+        self::MAX_CONCURRENT => 20,
     ];
 
     /** @var callable(): int */
@@ -150,12 +154,18 @@ final class AiQuota
         return $this->int(self::MAX_INPUT_CHARS);
     }
 
+    public function maxConcurrent(): int
+    {
+        return $this->int(self::MAX_CONCURRENT);
+    }
+
     /** @return array<string, int> each limit's value now, by key (as FIELDS) */
     public function values(): array
     {
         return [
             self::REQUESTS_PER_HOUR => $this->requestsPerHour(),
             self::MAX_INPUT_CHARS => $this->maxInputChars(),
+            self::MAX_CONCURRENT => $this->maxConcurrent(),
         ];
     }
 

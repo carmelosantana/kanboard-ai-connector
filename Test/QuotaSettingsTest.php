@@ -47,30 +47,30 @@ class QuotaSettingsTest extends Base
 
     public function testNonAdminIsRefused(): void
     {
-        $this->stubSession(false, [AiQuota::REQUESTS_PER_HOUR => '5', AiQuota::MAX_INPUT_CHARS => '100']);
+        $this->stubSession(false, [AiQuota::REQUESTS_PER_HOUR => '5', AiQuota::MAX_INPUT_CHARS => '100', AiQuota::MAX_CONCURRENT => '2']);
         $this->expectException(AccessForbiddenException::class);
         $this->driveSaveLimits();
     }
 
     public function testBadCsrfIsRefused(): void
     {
-        $this->stubSession(true, [AiQuota::REQUESTS_PER_HOUR => '5', AiQuota::MAX_INPUT_CHARS => '100'], false);
+        $this->stubSession(true, [AiQuota::REQUESTS_PER_HOUR => '5', AiQuota::MAX_INPUT_CHARS => '100', AiQuota::MAX_CONCURRENT => '2'], false);
         $this->expectException(AccessForbiddenException::class);
         $this->driveSaveLimits();
     }
 
     public function testAdminSavesBothLimits(): void
     {
-        $this->stubSession(true, [AiQuota::REQUESTS_PER_HOUR => '5', AiQuota::MAX_INPUT_CHARS => '100']);
+        $this->stubSession(true, [AiQuota::REQUESTS_PER_HOUR => '5', AiQuota::MAX_INPUT_CHARS => '100', AiQuota::MAX_CONCURRENT => '2']);
         $this->driveSaveLimits();
-        $this->assertSame([AiQuota::REQUESTS_PER_HOUR => 5, AiQuota::MAX_INPUT_CHARS => 100], $this->stored());
+        $this->assertSame([AiQuota::REQUESTS_PER_HOUR => 5, AiQuota::MAX_INPUT_CHARS => 100, AiQuota::MAX_CONCURRENT => 2], $this->stored());
     }
 
     public function testABadValueSavesNothing(): void
     {
-        $this->stubSession(true, [AiQuota::REQUESTS_PER_HOUR => '5', AiQuota::MAX_INPUT_CHARS => '0']);
+        $this->stubSession(true, [AiQuota::REQUESTS_PER_HOUR => '5', AiQuota::MAX_INPUT_CHARS => '0', AiQuota::MAX_CONCURRENT => '2']);
         $this->driveSaveLimits();
-        $this->assertSame([AiQuota::REQUESTS_PER_HOUR => 30, AiQuota::MAX_INPUT_CHARS => 32000], $this->stored());
+        $this->assertSame([AiQuota::REQUESTS_PER_HOUR => 30, AiQuota::MAX_INPUT_CHARS => 32000, AiQuota::MAX_CONCURRENT => 3], $this->stored());
     }
 
     public function testTheRouteIsRegisteredAndTheTemplatePostsEveryField(): void
@@ -85,5 +85,12 @@ class QuotaSettingsTest extends Base
     {
         $template = file_get_contents(dirname(__DIR__).'/Template/config/settings.php');
         $this->assertStringContainsString('AiQuota::CEILINGS[$key]', $template);
+    }
+
+    public function testLimitsFormShowsTheConcurrentField(): void
+    {
+        $this->assertSame('AI requests running at once per person', AiQuota::FIELDS[AiQuota::MAX_CONCURRENT]);
+        $this->assertSame(array_keys(AiQuota::FIELDS), array_keys((new AiQuota($this->container))->values()));
+        $this->assertSame(20, AiQuota::CEILINGS[AiQuota::MAX_CONCURRENT]);
     }
 }
