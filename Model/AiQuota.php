@@ -210,9 +210,9 @@ final class AiQuota
                     'created_at' => $now,
                 ]);
                 if ($attemptId === false) {
-                    // PicoDb reports a duplicate key as false, having rolled the whole transaction back.
+                    // PicoDb reports any integrity failure as false, having rolled the transaction back.
                     $db->cancelTransaction();
-                    return $this->duplicate($userId, $feature);
+                    return $this->conflict($userId, $feature, $attemptKey, 'attempt not stored');
                 }
             }
             $db->closeTransaction();
@@ -223,11 +223,23 @@ final class AiQuota
             }
             // Defensive backstop: PicoDb usually wraps errors or returns false, so this rarely runs.
             if ($e instanceof \PDOException && in_array((string) $e->getCode(), ['23000', '23505'], true)) {
-                return $this->duplicate($userId, $feature);
+                return $this->conflict($userId, $feature, $attemptKey, 'integrity error ' . $e->getCode());
             }
             return $this->unavailable($userId, $feature, 'reservation failed: ' . (new \ReflectionClass($e))->getShortName());
         }
         return new Reservation(Reservation::OK, null, $attemptId === null ? null : (int) $attemptId);
+    }
+
+    /**
+     * After a rolled-back insert: a duplicate only when the key is really there (another request
+     * committed it first); any other integrity failure (a foreign key, another constraint) is
+     * unavailable, since nothing was sent under this key.
+     */
+    private function conflict(int $userId, string $feature, string $attemptKey, string $reason): Reservation
+    {
+        $taken = $this->container['db']->table(self::ATTEMPTS_TABLE)
+            ->eq('user_id', $userId)->eq('feature', $feature)->eq('attempt_key', $attemptKey)->exists();
+        return $taken ? $this->duplicate($userId, $feature) : $this->unavailable($userId, $feature, $reason);
     }
 
     private function duplicate(int $userId, string $feature): Reservation

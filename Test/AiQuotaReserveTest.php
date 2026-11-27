@@ -220,27 +220,16 @@ class AiQuotaReserveTest extends Base
         }
     }
 
-    public function testUniqueViolationRollsBackAndReadsAsDuplicate(): void
+    /** A db whose aiconnector_attempts table is $table (a \PicoDb\Table subclass factory). */
+    private function withAttemptsTable(callable $table): void
     {
         $real = $this->container['db'];
-        // A db decorator that slips the same attempt row in just before reserve() inserts it.
-        $this->container['db'] = new class($real) {
-            public function __construct(private $db) {}
+        $this->container['db'] = new class($real, $table) {
+            public function __construct(private $db, private $table) {}
 
             public function table($name)
             {
-                if ($name !== 'aiconnector_attempts') {
-                    return $this->db->table($name);
-                }
-                return new class($this->db, $name) extends \PicoDb\Table {
-                    public function insert(array $data)
-                    {
-                        if (isset($data['attempt_key'])) {
-                            parent::insert($data);
-                        }
-                        return parent::insert($data);
-                    }
-                };
+                return $name === 'aiconnector_attempts' ? ($this->table)($this->db, $name) : $this->db->table($name);
             }
 
             public function __call($method, $args)
@@ -248,15 +237,76 @@ class AiQuotaReserveTest extends Base
                 return $this->db->$method(...$args);
             }
         };
+    }
 
+    public function testUniqueViolationFromARaceReadsAsDuplicate(): void
+    {
+        // Another request committed the same key between reserve()'s check and its insert:
+        // the check is made to miss it, the insert then hits the unique key.
+        $real = $this->container['db'];
+        $real->table('aiconnector_attempts')->insert(['user_id' => $this->ana, 'feature' => 'summary', 'attempt_key' => 'k1', 'created_at' => $this->now]);
+        $lies = new \ArrayObject(['left' => 1]);
+        $this->withAttemptsTable(fn ($db, $name) => new class($db, $name, $lies) extends \PicoDb\Table {
+            public function __construct($db, $name, private \ArrayObject $lies)
+            {
+                parent::__construct($db, $name);
+            }
+
+            public function exists()
+            {
+                // Only reserve()'s first key check misses the row; the re-read after rollback sees it.
+                if ($this->lies['left']-- > 0) {
+                    return false;
+                }
+                return parent::exists();
+            }
+        });
         $r = $this->reserve('k1');
         $this->container['db'] = $real;
 
         $this->assertSame(Reservation::DUPLICATE_ATTEMPT, $r->outcome);
         $this->assertSame(0, $this->counted(), 'the count row is rolled back with the attempt');
-        $this->assertCount(0, $this->attempts());
+        $this->assertCount(1, $this->attempts(), 'only the other request\'s attempt');
         $this->assertFalse($real->getConnection()->inTransaction());
-        $this->assertTrue($this->reserve('k1')->ok(), 'the connection still works');
+        $this->assertTrue($this->reserve('k2')->ok(), 'the connection still works');
+    }
+
+    public function testAFailedInsertWithNoMatchingKeyIsUnavailableNotDuplicate(): void
+    {
+        // PicoDb returns false for any integrity failure (a foreign key on Postgres, any 23000
+        // on MariaDB): only a key that is really there is a duplicate.
+        $real = $this->container['db'];
+        $this->withAttemptsTable(fn ($db, $name) => new class($db, $name) extends \PicoDb\Table {
+            public function persist(array $data)
+            {
+                return false;
+            }
+        });
+        $r = $this->reserve('k1');
+        $this->container['db'] = $real;
+
+        $this->assertSame(Reservation::UNAVAILABLE, $r->outcome);
+        $this->assertSame(0, $this->counted());
+        $this->assertCount(0, $this->attempts());
+        $this->assertTrue($this->reserve('k1')->ok(), 'the key was never used');
+    }
+
+    public function testAnIntegrityExceptionWithNoMatchingKeyIsUnavailable(): void
+    {
+        $real = $this->container['db'];
+        $this->withAttemptsTable(fn ($db, $name) => new class($db, $name) extends \PicoDb\Table {
+            public function persist(array $data)
+            {
+                $e = new \PDOException('integrity');
+                (new \ReflectionProperty(\Exception::class, 'code'))->setValue($e, '23000');
+                throw $e;
+            }
+        });
+        $r = $this->reserve('k1');
+        $this->container['db'] = $real;
+
+        $this->assertSame(Reservation::UNAVAILABLE, $r->outcome);
+        $this->assertTrue($this->reserve('k1')->ok());
     }
 
     public function testAFailedReservationLogsTheExceptionClassNotItsMessage(): void
