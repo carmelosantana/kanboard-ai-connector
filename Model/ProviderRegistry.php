@@ -98,6 +98,10 @@ class ProviderRegistry extends Base
     public const KEY_PREFIX     = 'aiconnector_key_';
     public const KEY_PLACEHOLDER = '••••••••';
 
+    /** Hook every consumer appends its AI features to: fn () => [['id','label','plugin'], …]. */
+    public const FEATURES_HOOK = 'aiconnector:features';
+    public const FEATURE_ID_PATTERN = '/^[a-z0-9][a-z0-9._-]{0,63}\z/';
+
     // ── Profile reads ─────────────────────────────────────────────────────────
 
     /**
@@ -160,6 +164,42 @@ class ProviderRegistry extends Base
             return '';
         }
         return $this->findProfile($id) !== null ? $id : '';
+    }
+
+    /**
+     * Every AI feature registered on FEATURES_HOOK, keyed by id. Ids must match
+     * FEATURE_ID_PATTERN (the AiQuota feature names); a duplicate id keeps the first entry;
+     * a listener that throws is logged and skipped, so one plugin cannot break the list.
+     *
+     * @return array<string, array{id:string,label:string,plugin:string}>
+     */
+    public function features(): array
+    {
+        $out = [];
+        foreach ($this->hook->getListeners(self::FEATURES_HOOK) as $listener) {
+            if (! is_callable($listener)) {
+                continue;
+            }
+            try {
+                $entries = $listener();
+            } catch (\Throwable $e) {
+                $this->logger->error(sprintf('[AiConnector] %s listener failed: %s', self::FEATURES_HOOK, get_class($e)));
+                continue;
+            }
+            if (! is_array($entries)) {
+                continue;
+            }
+            foreach ($entries as $e) {
+                if (! is_array($e) || ! is_string($e['id'] ?? null) || ! is_string($e['label'] ?? null) || ! is_string($e['plugin'] ?? null)) {
+                    continue;
+                }
+                if (! preg_match(self::FEATURE_ID_PATTERN, $e['id']) || isset($out[$e['id']])) {
+                    continue;
+                }
+                $out[$e['id']] = ['id' => $e['id'], 'label' => $e['label'], 'plugin' => $e['plugin']];
+            }
+        }
+        return $out;
     }
 
     /** One full profile struct, or null. */
