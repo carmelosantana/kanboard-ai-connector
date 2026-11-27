@@ -1,7 +1,7 @@
 <?php
 namespace Kanboard\Plugin\AiConnector\Schema;
 
-const VERSION = 2;
+const VERSION = 3;
 
 // One row per AI request let through by AiQuota, kept for an hour (the quota window).
 function version_1($pdo)
@@ -24,4 +24,23 @@ function version_2($pdo)
         user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
         locked_at BIGINT NOT NULL DEFAULT 0
     )');
+}
+
+// One row per AI attempt, so a repeated attempt key is refused: the unique index is the guard.
+// attempt_key is VARCHAR compared by bytes, so 'AttemptA' and 'attempta' differ.
+// finished_at stays 0 until the attempt ends.
+function version_3($pdo)
+{
+    $pdo->exec('CREATE TABLE IF NOT EXISTS aiconnector_attempts (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        feature VARCHAR(64) NOT NULL DEFAULT \'\',
+        attempt_key VARCHAR(64) NOT NULL,
+        status VARCHAR(16) NOT NULL DEFAULT \'running\',
+        lease_until BIGINT NOT NULL DEFAULT 0,
+        created_at BIGINT NOT NULL DEFAULT 0,
+        finished_at BIGINT NOT NULL DEFAULT 0
+    )');
+    $pdo->exec('CREATE UNIQUE INDEX IF NOT EXISTS aiconnector_attempts_key_uq ON aiconnector_attempts(user_id, feature, attempt_key)');
+    $pdo->exec('CREATE INDEX IF NOT EXISTS aiconnector_attempts_running_idx ON aiconnector_attempts(user_id, status)');
 }
