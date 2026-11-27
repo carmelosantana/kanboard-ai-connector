@@ -2,6 +2,19 @@
 
 All notable changes to AiConnector will be documented here.
 
+## 1.5.0 — Unreleased
+
+### Added
+- Streaming API for plugin authors: `AiStream::events(AiRequest)` returns one guarded, UI-agnostic stream of events (`Started`, `TextDelta`, `StructuredDelta`, `ReasoningDelta`, `ToolCallStart`, `ToolCallEnd`, `Progress`, then exactly one of `Finish`, `Refused` or `Error`). It has no transport: the host decides how to show it. Every outcome is an event, and no php-agents type appears in any signature.
+- Guard rails run in order before any request goes out: readiness, signed-in user, a registered feature, model routing, provider setup, then one atomic reservation. Each attempt is closed as finished or failed, however the stream ends.
+- `AiQuota::reserve()`: checks an attempt key, a per-person concurrent limit and the hourly quota in one step, and counts the request. A repeated attempt key is refused as a duplicate and never charged twice. `consume()` is unchanged.
+- A third AI limit, **AI requests running at once per person** (default 3, ceiling 20), in **Settings → AI Connector → AI Limits**.
+- Cancellation through the `AiCancellation` interface, with idle and total time limits per request.
+- A new `aiconnector_attempts` table (kept 24 hours).
+
+### Changed
+- A failed reservation now logs a distinct reason with the exception's class name (never its message).
+
 ## 1.4.0 — 2026-11-27
 
 ### Added

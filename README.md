@@ -108,8 +108,12 @@ plugins that use AI Connector:
 
 ![The AI Limits section of the AI Connector settings](https://raw.githubusercontent.com/carmelosantana/kanboard-ai-connector/main/docs/screenshots/ai-limits.webp)
 
-Neither limit can be switched off: the hourly limit goes up to 10,000 and the
-length cap up to 1,000,000 characters. Test Connection counts against the
+- **AI requests running at once per person** (default 3, ceiling 20) — how many
+  streamed requests one person can have open at the same time (v1.5.0). It bounds the
+  PHP workers and provider connections a person can hold; the hourly limit bounds spend.
+
+None of the limits can be switched off: the hourly limit goes up to 10,000, the
+length cap up to 1,000,000 characters and the concurrent limit up to 20. Test Connection counts against the
 admin's own hourly limit. A request past either limit is refused before
 it reaches the provider, and the person sees why. A person's requests are checked and
 counted one at a time, so parallel requests cannot overshoot the quota.
@@ -281,6 +285,127 @@ Show the shared picker in your form with options computed by your controller:
 It renders nothing when the feature is locked, fewer than two profiles are offered, or the
 project does not let members switch. Feature-detect with
 `method_exists(ProviderRegistry::class, 'resolve')` and keep AI off without it.
+
+## Streaming API (AiStream) (v1.5.0+)
+
+`AiStream` gives a plugin one guarded stream of events for an AI request. It is
+UI-agnostic and has no transport: the host decides whether the events go to a page,
+server-sent events or a background job. It runs the guard rails (readiness, signed-in
+user, registered feature, model routing, the quota and the attempt key) and charges the
+request itself, so a host must not also call `AiQuota::consume()`. No `php-agents`
+class appears in any request or event.
+
+```php
+use Kanboard\Plugin\AiConnector\Stream\AiRequest;
+use Kanboard\Plugin\AiConnector\Stream\AiStream;
+use Kanboard\Plugin\AiConnector\Stream\Event;
+
+$request = new AiRequest(
+    feature: 'myplugin.summary',          // registered on aiconnector:features
+    attemptKey: $this->request->getStringParam('attempt'), // one per user action
+    messages: $messages,
+    schema: $mySchemaJson,                // null for a plain text stream
+    projectId: $projectId,
+);
+
+foreach ((new AiStream($this->container))->events($request) as $event) {
+    if ($event instanceof Event\TextDelta) {
+        // output-encode and show $event->text
+    } elseif ($event instanceof Event\Refused) {
+        // nothing was sent: show $event->message
+    } elseif ($event instanceof Event\Error) {
+        // the attempt was charged and failed: show $event->message
+    } elseif ($event instanceof Event\Finish) {
+        // structured stream: $event->result is the decoded array (reason "stop");
+        // run it through your own normalizer and schema checks as before
+    }
+}
+```
+
+Feature-detect with `class_exists(AiStream::class)` and keep streaming off without it.
+`events()` never throws for what a request or a provider does; it throws
+`InvalidArgumentException` only for programmer errors (malformed messages or attempt key,
+schema text that is not JSON), and `LogicException` inside a database transaction.
+`AiRequest` takes no user id: the signed-in user is read from the session. `idleTimeout`
+(default 60 s, clamped to 1-120) and `maxDuration` (default 300 s, clamped to 1-600)
+bound a request. Pass an `AiCancellation` (`isCancelled(): bool`) to let the person stop it.
+
+### Events
+
+All are `final readonly` classes under `Stream\Event\`.
+
+| Event | Fields | When |
+|---|---|---|
+| `Started` | `model`, `streaming` | the attempt is reserved and the request is about to go; `streaming` is false on the blocking path |
+| `TextDelta` | `text` | answer text (text stream) |
+| `StructuredDelta` | `json` | a fragment of the JSON document (structured stream) |
+| `ReasoningDelta` | `text` | provider reasoning, where the provider sends it |
+| `ToolCallStart` | `index`, `id`, `name` | the model opens a tool call (text stream) |
+| `ToolCallEnd` | `index`, `id`, `name`, `arguments` | the call's arguments are complete and decoded |
+| `Progress` | `elapsedMs`, `receivedChars` | at most once a second while the stream is idle or flowing; the host's heartbeat |
+| `Finish` | `reason`, `model`, `usage`, `result` | terminal: the provider answered. `result` only on a structured stream that ended `stop` and decoded to an array |
+| `Refused` | `code`, `message` | terminal: no provider request was made and nothing was charged, except `quota` and `too_long`, which are logged but not counted |
+| `Error` | `code`, `message` | terminal: the attempt was charged and failed |
+
+A host that drains the generator gets exactly one terminal event, last. `Finish.model` is
+the profile's configured model; `usage` is `{promptTokens, completionTokens, totalTokens}`
+or null. `message` is a fixed translated sentence; real errors go to the log only.
+
+### Terminal mapping
+
+| Situation | Terminal event |
+|---|---|
+| No ready profile at all | `Refused(not_ready)` |
+| No signed-in user | `Refused(not_signed_in)` |
+| Feature not registered on `aiconnector:features` | `Refused(unknown_feature)` |
+| Routing finds no ready profile | `Refused(no_profile)` |
+| The provider cannot be built (unknown type, unsafe URL) | `Refused(setup_failed)` |
+| Input over the length cap | `Refused(too_long)` |
+| Same key already used by this user for this feature | `Refused(duplicate_attempt)` |
+| Concurrent limit reached | `Refused(too_many_running)` |
+| Hourly quota reached | `Refused(quota)` |
+| The count could not be stored | `Refused(unavailable)` |
+| Cancelled before the reservation | `Refused(cancelled)` (nothing charged) |
+| Cancelled after the reservation, before the request | `Finish(cancelled)` (charged) |
+| Provider finished: stop, tool use, max tokens, refusal, content filter, context window exceeded | `Finish(stop / tool_use / max_tokens / refusal / content_filter / context_window_exceeded)` |
+| Provider paused the turn | `Finish(incomplete)` |
+| Provider error, premature end of stream, tool-call overflow | `Error(provider_error)` |
+| Idle or total time limit passed | `Error(timeout)` |
+| Transport or HTTP failure, anything else | `Error(provider_error)` |
+| The stream ends with no finish | `Error(provider_error)` |
+| Cancelled before a finish arrives | `Finish(cancelled)` |
+| Finish already received, then cancelled | the provider's `Finish` stands |
+| Structured: `stop`, but the document does not decode to an array | `Finish(invalid_output)` |
+| Structured: the document is over the size or depth cap | `Finish(output_too_large)` |
+
+### Host checklist
+
+Before building an `AiRequest`, the host:
+
+- checks CSRF and that the person may use this feature on this project, task or resource (project
+  membership, task visibility); AiConnector's routing reads the project's settings but authorizes
+  nothing;
+- generates the attempt key per user action, server-side or from a client nonce it validates;
+- owns cancellation: only the person who started an attempt may stop it;
+- runs long requests with `session_write_close()` and `ignore_user_abort(true)`, as AgentChat does;
+- treats every delta, reasoning, tool argument and result as untrusted output;
+- persists results if it wants to answer duplicates or recover lost answers;
+- replaces its own `AiQuota::consume()` call: `AiStream` charges, so a host must not charge again.
+
+### Notes
+
+- The attempt key is required and is the host's idempotency key for one action (1-64 characters of
+  `A-Za-z0-9._-`). The same key again is refused as `duplicate_attempt` whether the first attempt is
+  running or done, and is never charged. AiConnector stores no output, so it cannot replay one.
+  Regenerate is a new key and a new charge, always an explicit action by the person.
+- The blocking path is used for providers without native streaming. It sends no `Progress`, and
+  cancellation is checked only before the call.
+- Structured requests currently answer through one blocking `structured()` call
+  (`Started(streaming: false)`, the document as one `StructuredDelta`). A streamed structured
+  response is planned with php-agents 0.21; it is not available yet.
+- A `ToolCallStart` without a matching `ToolCallEnd` means the call was not completed (it was
+  dropped for an invalid name or id).
+- Requires the PHP `mbstring` extension (php-agents 0.19 needs it, and so does Kanboard).
 
 ## ModelCatalog API (v1.1.0+)
 
