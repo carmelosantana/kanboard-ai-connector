@@ -5,6 +5,7 @@ namespace Kanboard\Plugin\AiConnector\Stream\Internal;
 use CarmeloSantana\PHPAgents\Contract\ProviderInterface;
 use CarmeloSantana\PHPAgents\Contract\UsageListener;
 use CarmeloSantana\PHPAgents\Contract\UsageReporting;
+use CarmeloSantana\PHPAgents\Enum\ProviderFinishReason;
 use CarmeloSantana\PHPAgents\Provider\Response;
 use CarmeloSantana\PHPAgents\Provider\Usage as UpstreamUsage;
 use CarmeloSantana\PHPAgents\Provider\UsageReport;
@@ -96,17 +97,24 @@ final class BlockingCall
             yield new ToolCallEnd($index, $call->id, $call->name, $call->arguments);
         }
 
-        $terminal = EventMapper::terminal($response->finishReason, self::usageOf($usage->report, $response->usage), $this->model);
+        yield $this->terminal($response->finishReason, self::usageOf($usage->report, $response->usage));
+    }
+
+    /** EventMapper's terminal for a finish reason; a provider finish error is logged. */
+    private function terminal(ProviderFinishReason $reason, ?UpstreamUsage $usage): Finish|Error
+    {
+        $terminal = EventMapper::terminal($reason, $usage, $this->model);
         if ($terminal instanceof Error) {
             ($this->onFinishError)('provider finish error');
         }
-        yield $terminal;
+        return $terminal;
     }
 
     /**
      * Started(streaming: false), one StructuredDelta under the 256 KiB cap, then Finish: `stop`
      * with the decoded array, `invalid_output` when it is not a non-empty array, or
-     * `output_too_large`.
+     * `output_too_large`. A Response that did not finish `stop` gets the stream path's terminal
+     * for its finish reason instead, with no StructuredDelta and no result.
      *
      * @return \Generator<int, object>
      */
@@ -123,6 +131,12 @@ final class BlockingCall
             $raw = self::withListener($provider, $usage)->structured($messages, $schema, []);
         } catch (\Throwable $e) {
             yield ($this->onException)($e);
+            return;
+        }
+
+        if ($raw instanceof Response && $raw->finishReason !== ProviderFinishReason::Stop) {
+            // Not a finished document: the stream path's terminal, no delta and no result.
+            yield $this->terminal($raw->finishReason, self::usageOf($usage->report, $raw->usage));
             return;
         }
 

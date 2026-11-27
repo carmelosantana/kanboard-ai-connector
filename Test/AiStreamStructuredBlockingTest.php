@@ -207,6 +207,55 @@ class AiStreamStructuredBlockingTest extends Base
         }
     }
 
+    /** Every php-agents finish reason, with the terminal the stream path maps it to. */
+    public static function finishReasons(): array
+    {
+        $cases = [];
+        foreach (ProviderFinishReason::cases() as $case) {
+            $cases[$case->name] = [$case, match ($case) {
+                ProviderFinishReason::Stop => 'stop',
+                ProviderFinishReason::ToolUse => 'tool_use',
+                ProviderFinishReason::MaxTokens => 'max_tokens',
+                ProviderFinishReason::Refusal => 'refusal',
+                ProviderFinishReason::ContentFilter => 'content_filter',
+                ProviderFinishReason::ContextWindowExceeded => 'context_window_exceeded',
+                ProviderFinishReason::PauseTurn => 'incomplete',
+                ProviderFinishReason::Error => 'Error:provider_error',
+            }];
+        }
+        return $cases;
+    }
+
+    /** @dataProvider finishReasons */
+    public function testSchemaRequestHonoursTheProviderFinishReason(ProviderFinishReason $reason, string $expected): void
+    {
+        $events = $this->drain(self::scripted(new Response('{"title": "Hi"}', $reason, [], 'm', new UpUsage(4, 5, 9))));
+        $terminal = end($events);
+
+        if ($reason === ProviderFinishReason::Stop) {
+            $this->assertSame(['Started', 'StructuredDelta', 'Finish'], self::shape($events));
+            $this->assertSame(['title' => 'Hi'], $terminal->result);
+            return;
+        }
+
+        if ($expected === 'Error:provider_error') {
+            $this->assertSame(['Started', 'Error'], self::shape($events), 'no StructuredDelta for an unfinished document');
+            $this->assertSame('provider_error', $terminal->code);
+            $this->assertSame('failed', $this->attemptStatus());
+            $lines = array_values(array_filter($this->logged, fn ($l) => str_contains($l, 'AI stream failed')));
+            $this->assertCount(1, $lines);
+            $this->assertStringContainsString('provider finish error', $lines[0]);
+            return;
+        }
+
+        $this->assertSame(['Started', 'Finish'], self::shape($events), 'no StructuredDelta for an unfinished document');
+        $this->assertSame($expected, $terminal->reason);
+        $this->assertSame('model-a', $terminal->model);
+        $this->assertNull($terminal->result, 'no result unless the provider stopped');
+        $this->assertSame(9, $terminal->usage->totalTokens);
+        $this->assertSame('finished', $this->attemptStatus(), 'the provider answered: charged');
+    }
+
     public function testBareSchemaAndNamedEnvelopeBothReachTheProvider(): void
     {
         $envelope = '{"name":"title_reply","schema":' . self::SCHEMA . '}';
