@@ -9,11 +9,11 @@ permissions:
   contents: read
 jobs:
   test:
-    uses: carmelosantana/kanboard-plugin-ci/.github/workflows/plugin-test.yml@21719ae8cc49d656a3644da8ea6c30093f0345be # harness 2026-11-25
+    uses: carmelosantana/kanboard-plugin-ci/.github/workflows/plugin-test.yml@d506a0a78c9c4d56fb6990c10da3d5887b62fa19 # harness 2026-11-27
   release:
     needs: test
     permissions:
       contents: write
-    uses: carmelosantana/kanboard-plugin-ci/.github/workflows/plugin-release.yml@21719ae8cc49d656a3644da8ea6c30093f0345be # harness 2026-11-25
+    uses: carmelosantana/kanboard-plugin-ci/.github/workflows/plugin-release.yml@d506a0a78c9c4d56fb6990c10da3d5887b62fa19 # harness 2026-11-27
     with:
       ship-docs: false

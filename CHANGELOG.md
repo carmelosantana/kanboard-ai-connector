@@ -2,7 +2,7 @@
 
 All notable changes to AiConnector will be documented here.
 
-## 1.5.0 — Unreleased
+## 1.5.0 — 2026-11-27
 
 ### Added
 - Streaming API for plugin authors: `AiStream::events(AiRequest)` returns one guarded, UI-agnostic stream of events (`Started`, `TextDelta`, `StructuredDelta`, `ReasoningDelta`, `ToolCallStart`, `ToolCallEnd`, `Progress`, then exactly one of `Finish`, `Refused` or `Error`). It has no transport: the host decides how to show it. Every outcome is an event, and no php-agents type appears in any signature.
