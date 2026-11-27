@@ -128,7 +128,8 @@ class AiStream extends Base
      * abandons the php-agents generator and so cancels its HTTP request. Reading stops at the
      * provider's Finish too: a cancel after it changes nothing.
      *
-     * A provider that is not an AbstractProvider gets one blocking call instead. A streamed
+     * A request with a schema takes the structured path (structured()). A provider that is not
+     * an AbstractProvider gets one blocking call instead. A streamed
      * request rejected as a request-shape error before any output gets one blocking call on the
      * same attempt and charge (BlockingCall, no second Started).
      *
@@ -145,6 +146,10 @@ class AiStream extends Base
             onDroppedTool: fn (int $index) => $this->logDroppedTool($userId, $request->feature, $index),
         );
 
+        if ($request->schema !== null) {
+            yield from $this->structured($provider, $blocking, $messages, $request);
+            return;
+        }
         if (! $provider instanceof AbstractProvider) {
             yield from $blocking->text($provider, $messages, $request->cancel);
             return;
@@ -225,11 +230,7 @@ class AiStream extends Base
             // A blocking answer sends nothing until it is complete, so the idle limit is the time
             // left; the maximum duration counts from Started, not from the fallback.
             $remaining = max(1.0, $request->maxDuration() - (($this->clock)() - $started));
-            $provider = $provider->withRequestLimits(new RequestLimits(
-                idleTimeout: $remaining,
-                maxDuration: $remaining,
-                tickInterval: 0.25,
-            ));
+            $provider = $provider->withRequestLimits(self::blockingLimits($remaining));
             yield from $blocking->textAnswer($provider, $messages);
             return;
         }
@@ -238,6 +239,36 @@ class AiStream extends Base
             $terminal = EventMapper::error('provider_error');
         }
         yield $terminal;
+    }
+
+    /**
+     * The structured path: a request with a schema never goes through streamEvents(). One
+     * blocking structured() call (BlockingCall), whose limits are the fallback's rule: a blocking
+     * answer sends nothing until it is done, so idle = max = the request's maximum duration.
+     *
+     * @return \Generator<int, object>
+     */
+    private function structured(object $provider, BlockingCall $blocking, array $messages, AiRequest $request): \Generator
+    {
+        if ($provider instanceof AbstractProvider) {
+            $provider = $provider->withRequestLimits(self::blockingLimits($request->maxDuration()));
+        }
+
+        if (interface_exists('CarmeloSantana\PHPAgents\Contract\StructuredStreaming')
+            && $provider instanceof \CarmeloSantana\PHPAgents\Contract\StructuredStreaming) {
+            // TASK 10: replace with the streamed structured call (php-agents 0.21 structuredEvents()).
+            // Until then a StructuredStreaming provider takes the same blocking call as any other.
+            yield from $blocking->structured($provider, $messages, (string) $request->schema, $request->cancel);
+            return;
+        }
+
+        yield from $blocking->structured($provider, $messages, (string) $request->schema, $request->cancel);
+    }
+
+    /** Limits for one blocking call: no bytes arrive until it is done, so idle = max = $seconds. */
+    private static function blockingLimits(float $seconds): RequestLimits
+    {
+        return new RequestLimits(idleTimeout: $seconds, maxDuration: $seconds, tickInterval: 0.25);
     }
 
     /** A thrown request as its Error, logged by class: a transport failure at the maximum duration is a timeout. */
