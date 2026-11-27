@@ -304,23 +304,26 @@ $request = new AiRequest(
     feature: 'myplugin.summary',          // registered on aiconnector:features
     attemptKey: $this->request->getStringParam('attempt'), // one per user action
     messages: $messages,
-    schema: $mySchemaJson,                // null for a plain text stream
+    schema: $mySchemaJson,                // a structured request; omit for a text stream
     projectId: $projectId,
 );
 
 foreach ((new AiStream($this->container))->events($request) as $event) {
-    if ($event instanceof Event\TextDelta) {
-        // output-encode and show $event->text
+    if ($event instanceof Event\StructuredDelta) {
+        // a fragment of the JSON document: show progress, never parse it as final
     } elseif ($event instanceof Event\Refused) {
         // nothing was sent: show $event->message
     } elseif ($event instanceof Event\Error) {
         // the attempt was charged and failed: show $event->message
     } elseif ($event instanceof Event\Finish) {
-        // structured stream: $event->result is the decoded array (reason "stop");
+        // $event->result is the decoded array when the reason is "stop", else null;
         // run it through your own normalizer and schema checks as before
     }
 }
 ```
+
+A text stream (no `schema`) sends `Event\TextDelta` (`$event->text`, output-encoded before
+display) instead of `StructuredDelta`, and its `Finish` has no `result`.
 
 Feature-detect with `class_exists(AiStream::class)` and keep streaming off without it.
 `events()` never throws for what a request or a provider does; it throws
@@ -343,8 +346,8 @@ All are `final readonly` classes under `Stream\Event\`.
 | `ToolCallStart` | `index`, `id`, `name` | the model opens a tool call (text stream) |
 | `ToolCallEnd` | `index`, `id`, `name`, `arguments` | the call's arguments are complete and decoded |
 | `Progress` | `elapsedMs`, `receivedChars` | at most once a second while the stream is idle or flowing; the host's heartbeat |
-| `Finish` | `reason`, `model`, `usage`, `result` | terminal: the provider answered. `result` only on a structured stream that ended `stop` and decoded to an array |
-| `Refused` | `code`, `message` | terminal: no provider request was made and nothing was charged, except `quota` and `too_long`, which are logged but not counted |
+| `Finish` | `reason`, `model`, `usage`, `result` | terminal: the provider answered. `result` only on a structured stream that ended `stop` and decoded to a non-empty array (an empty `{}` or `[]` is `invalid_output`) |
+| `Refused` | `code`, `message` | terminal: no provider request was made and nothing was charged; `quota` and `too_long` are logged, not counted |
 | `Error` | `code`, `message` | terminal: the attempt was charged and failed |
 
 A host that drains the generator gets exactly one terminal event, last. `Finish.model` is
@@ -375,8 +378,9 @@ or null. `message` is a fixed translated sentence; real errors go to the log onl
 | The stream ends with no finish | `Error(provider_error)` |
 | Cancelled before a finish arrives | `Finish(cancelled)` |
 | Finish already received, then cancelled | the provider's `Finish` stands |
-| Structured: `stop`, but the document does not decode to an array | `Finish(invalid_output)` |
-| Structured: the document is over the size or depth cap | `Finish(output_too_large)` |
+| Structured: `stop`, but the document does not decode to a non-empty array | `Finish(invalid_output)` |
+| Structured: the document is too deep to decode | `Finish(invalid_output)` |
+| Structured: the document is over the size cap | `Finish(output_too_large)` |
 
 ### Host checklist
 
@@ -398,11 +402,26 @@ Before building an `AiRequest`, the host:
   `A-Za-z0-9._-`). The same key again is refused as `duplicate_attempt` whether the first attempt is
   running or done, and is never charged. AiConnector stores no output, so it cannot replay one.
   Regenerate is a new key and a new charge, always an explicit action by the person.
-- The blocking path is used for providers without native streaming. It sends no `Progress`, and
-  cancellation is checked only before the call.
-- Structured requests currently answer through one blocking `structured()` call
-  (`Started(streaming: false)`, the document as one `StructuredDelta`). A streamed structured
-  response is planned with php-agents 0.21; it is not available yet.
+- The blocking path is one blocking `chat()` or `structured()` call: the whole answer as one
+  `TextDelta` or `StructuredDelta`, tool calls as Start/End pairs, then the terminal event. It
+  sends no `Progress`, and cancellation is checked only before the call. A request takes it in
+  three cases:
+  - **Providers without native streaming** (not a php-agents `AbstractProvider`, e.g. php-agents' CLI
+    provider): `Started(streaming: false)`.
+  - **Structured requests** (a `schema`): `Started(streaming: false)`, until php-agents 0.21
+    brings streamed structured output.
+  - **Rejected-stream fallback:** when the streamed request is rejected as a request-shape error
+    (HTTP 400, 404, 405, 415 or 422) before any output, AiConnector makes one blocking call on the
+    same attempt and the same charge, and logs it. Not on 401/403/429/5xx, not after output, not
+    after a cancel. The consumer keeps the original `Started(streaming: true)`; no second
+    `Started` is sent.
+
+  A structured answer the provider did not finish `stop` ends with the same terminal as a stream
+  would (`max_tokens`, `refusal`, `Error(provider_error)`, ...), with no `StructuredDelta` and no
+  `result`.
+- `idleTimeout` and `maxDuration` are enforced through php-agents' `AbstractProvider` request
+  limits. Providers that are not an `AbstractProvider` (e.g. php-agents' CLI provider) get no request time
+  limits from AiConnector.
 - A `ToolCallStart` without a matching `ToolCallEnd` means the call was not completed (it was
   dropped for an invalid name or id).
 - Requires the PHP `mbstring` extension (php-agents 0.19 needs it, and so does Kanboard).
