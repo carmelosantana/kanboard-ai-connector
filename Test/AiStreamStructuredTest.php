@@ -401,4 +401,11 @@ class AiStreamStructuredTest extends Base
             $this->assertStringNotContainsString('schema must be', $line);
         }
     }
+
+    public function testEmptyFragmentsAreNotEmitted(): void
+    {
+        $events = $this->drain(self::provider(self::document('', '{"title":"Hi"}', '', '')));
+        $this->assertSame(['Started', 'StructuredDelta', 'Finish'], self::shape($events));
+        $this->assertSame(['title' => 'Hi'], end($events)->result);
+    }
 }

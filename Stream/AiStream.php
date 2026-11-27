@@ -273,7 +273,8 @@ class AiStream extends Base
                 }
 
                 if ($event instanceof UpstreamStructuredDelta) {
-                    if (! $structured) {
+                    if (! $structured || $event->delta === '') {
+                        // Text streams carry no document; an empty fragment is not an event.
                         continue;
                     }
                     // The byte cap is checked before the fragment is kept or shown.
