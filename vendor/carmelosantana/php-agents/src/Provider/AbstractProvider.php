@@ -7,14 +7,20 @@ namespace CarmeloSantana\PHPAgents\Provider;
 use CarmeloSantana\PHPAgents\Contract\MessageInterface;
 use CarmeloSantana\PHPAgents\Contract\ProviderInterface;
 use CarmeloSantana\PHPAgents\Contract\ToolInterface;
+use CarmeloSantana\PHPAgents\Contract\UsageListener;
+use CarmeloSantana\PHPAgents\Contract\UsageReporting;
+use CarmeloSantana\PHPAgents\Enum\ProviderFinishReason;
 use CarmeloSantana\PHPAgents\Exception\ProviderException;
+use CarmeloSantana\PHPAgents\Provider\Stream\StreamEvent;
+use CarmeloSantana\PHPAgents\Provider\Stream\StreamProjector;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\HttpClient\HttpClient;
+use Symfony\Contracts\HttpClient\Exception\HttpExceptionInterface;
 use Symfony\Contracts\HttpClient\Exception\RedirectionExceptionInterface;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
 use Symfony\Contracts\HttpClient\ResponseInterface;
 
-abstract class AbstractProvider implements ProviderInterface
+abstract class AbstractProvider implements ProviderInterface, UsageReporting
 {
     protected const int OPENAI_MAX_TOOLS = 128;
 
@@ -23,6 +29,8 @@ abstract class AbstractProvider implements ProviderInterface
     protected string $apiKey;
     protected HttpClientInterface $httpClient;
     protected ?LoggerInterface $logger;
+
+    private ?UsageListener $usageListener = null;
 
     /** Time, size and redirect limits that every request of this provider passes through apply(). */
     protected RequestLimits $requestLimits;
@@ -70,6 +78,76 @@ abstract class AbstractProvider implements ProviderInterface
     {
         return $this->requestLimits;
     }
+
+    public function withUsageListener(UsageListener $listener): static
+    {
+        $clone = clone $this;
+        $clone->usageListener = $listener;
+
+        return $clone;
+    }
+
+    protected function reportUsage(UsageReport $report): void
+    {
+        try {
+            $this->usageListener?->onUsage($report);
+        } catch (\Throwable $e) {
+            try {
+                $this->logger?->warning('Usage listener failed.', ['exception_class' => $e::class]);
+            } catch (\Throwable) {
+                // Logging is best-effort so inference outcomes are preserved.
+            }
+        }
+    }
+
+    /** @param array<string, mixed> $options */
+    protected function usageOperation(array &$options, string $own): string
+    {
+        $operation = $options[UsageReport::OPERATION_OPTION] ?? $own;
+        unset($options[UsageReport::OPERATION_OPTION]);
+
+        return $operation;
+    }
+
+    protected function startClock(): int
+    {
+        return (int) hrtime(true);
+    }
+
+    protected function elapsedMs(int $start): int
+    {
+        return intdiv($this->startClock() - $start, 1_000_000);
+    }
+
+    protected static function finishedFailed(ProviderFinishReason $r): bool
+    {
+        return $r === ProviderFinishReason::Error;
+    }
+
+    /**
+     * The normalised projection of streamEvents(): one Response per text or reasoning delta,
+     * then exactly one terminal Response carrying the finish reason, usage, model, tool calls
+     * and content blocks. Providers implement streamEvents(); this shape is the same for all.
+     *
+     * @param MessageInterface[] $messages
+     * @param ToolInterface[] $tools
+     * @param array<string, mixed> $options
+     * @return iterable<Response>
+     */
+    final public function stream(array $messages, array $tools = [], array $options = []): iterable
+    {
+        return StreamProjector::toResponses($this->streamEvents($messages, $tools, $options));
+    }
+
+    /**
+     * Stream the reply as typed events, ending with exactly one Finish.
+     *
+     * @param MessageInterface[] $messages
+     * @param ToolInterface[] $tools
+     * @param array<string, mixed> $options
+     * @return iterable<StreamEvent>
+     */
+    abstract public function streamEvents(array $messages, array $tools = [], array $options = []): iterable;
 
     /**
      * Decode a JSON response body. A 3xx is not followed (max_redirects is 0 by default),
@@ -153,4 +231,30 @@ abstract class AbstractProvider implements ProviderInterface
      * @param array<string, mixed> $data
      */
     abstract protected function parseResponse(array $data): Response;
+
+    /**
+     * Yields $events and cancels $response however they end: completed, thrown, or abandoned
+     * (the consumer stopped iterating), whatever the client does when the response is destroyed.
+     * Only an HTTP status error leaves the response open, for the caller to read its error body;
+     * anything else after a successful status (a parser limit, a provider error event) cancels.
+     *
+     * @template T
+     * @param \Generator<int, T, mixed, mixed> $events
+     * @return \Generator<int, T, mixed, void>
+     */
+    protected static function cancelOnAbandon(ResponseInterface $response, \Generator $events): \Generator
+    {
+        $keepResponse = false;
+        try {
+            yield from $events;
+        } catch (\Throwable $e) {
+            $keepResponse = $e instanceof HttpExceptionInterface;
+
+            throw $e;
+        } finally {
+            if (!$keepResponse) {
+                $response->cancel();
+            }
+        }
+    }
 }

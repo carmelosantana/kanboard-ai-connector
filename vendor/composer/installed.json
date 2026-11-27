@@ -2,20 +2,21 @@
     "packages": [
         {
             "name": "carmelosantana/php-agents",
-            "version": "v0.17.0",
-            "version_normalized": "0.17.0.0",
+            "version": "v0.19.0",
+            "version_normalized": "0.19.0.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/carmelosantana/php-agents.git",
-                "reference": "f8151ae2460cfd1311885a3257b867b933796dc5"
+                "reference": "6c1ff19c3f81ce6fe88dc580d653f219a96a3a9f"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/carmelosantana/php-agents/zipball/f8151ae2460cfd1311885a3257b867b933796dc5",
-                "reference": "f8151ae2460cfd1311885a3257b867b933796dc5",
+                "url": "https://api.github.com/repos/carmelosantana/php-agents/zipball/6c1ff19c3f81ce6fe88dc580d653f219a96a3a9f",
+                "reference": "6c1ff19c3f81ce6fe88dc580d653f219a96a3a9f",
                 "shasum": ""
             },
             "require": {
+                "ext-mbstring": "*",
                 "php": "^8.4",
                 "psr/log": "^3.0",
                 "symfony/http-client": "^7.0 || ^8.0"
@@ -28,8 +29,7 @@
                 "hkulekci/qdrant": "Vector similarity search for persistent agent memory",
                 "yethee/tiktoken-php": "Accurate token counting for OpenAI models (cl100k_base, o200k_base)"
             },
-            "time": "2026-11-18T20:20:10+00:00",
-            "published-time": "2026-11-19T01:43:00+00:00",
+            "time": "2026-11-24T13:57:23+00:00",
             "type": "library",
             "extra": {
                 "php-agents": []
@@ -59,7 +59,7 @@
             ],
             "support": {
                 "issues": "https://github.com/carmelosantana/php-agents/issues",
-                "source": "https://github.com/carmelosantana/php-agents/tree/v0.17.0"
+                "source": "https://github.com/carmelosantana/php-agents/tree/v0.19.0"
             },
             "install-path": "../carmelosantana/php-agents"
         },
@@ -139,17 +139,17 @@
         },
         {
             "name": "symfony/http-client",
-            "version": "v8.1.11",
-            "version_normalized": "8.1.11.0",
+            "version": "v8.1.12",
+            "version_normalized": "8.1.12.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/symfony/http-client.git",
-                "reference": "1758b323ba9c5e88b42602b9c2cb27b640de4d36"
+                "reference": "f9d980e61181c3d642f630d082e89f9e1266c4ec"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/symfony/http-client/zipball/1758b323ba9c5e88b42602b9c2cb27b640de4d36",
-                "reference": "1758b323ba9c5e88b42602b9c2cb27b640de4d36",
+                "url": "https://api.github.com/repos/symfony/http-client/zipball/f9d980e61181c3d642f630d082e89f9e1266c4ec",
+                "reference": "f9d980e61181c3d642f630d082e89f9e1266c4ec",
                 "shasum": ""
             },
             "require": {
@@ -160,7 +160,7 @@
                 "symfony/service-contracts": "^2.5|^3"
             },
             "conflict": {
-                "amphp/amp": "<3",
+                "amphp/amp": "<3.0.1",
                 "php-http/discovery": "<1.15"
             },
             "provide": {
@@ -178,13 +178,14 @@
                 "psr/http-client": "^1.0",
                 "symfony/cache": "^7.4|^8.0",
                 "symfony/dependency-injection": "^7.4|^8.0",
+                "symfony/http-foundation": "^7.4.23|^8.1.11",
                 "symfony/http-kernel": "^7.4|^8.0",
                 "symfony/messenger": "^7.4|^8.0",
                 "symfony/process": "^7.4|^8.0",
                 "symfony/rate-limiter": "^7.4|^8.0",
                 "symfony/stopwatch": "^7.4|^8.0"
             },
-            "time": "2026-11-04T08:39:20+00:00",
+            "time": "2026-11-25T07:24:17+00:00",
             "type": "library",
             "installation-source": "dist",
             "autoload": {
@@ -215,7 +216,7 @@
                 "http"
             ],
             "support": {
-                "source": "https://github.com/symfony/http-client/tree/v8.1.11"
+                "source": "https://github.com/symfony/http-client/tree/v8.1.12"
             },
             "funding": [
                 {
@@ -413,6 +414,6 @@
             "install-path": "../symfony/service-contracts"
         }
     ],
-    "dev": false,
+    "dev": true,
     "dev-package-names": []
 }

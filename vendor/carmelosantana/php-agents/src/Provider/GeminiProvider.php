@@ -10,10 +10,20 @@ use CarmeloSantana\PHPAgents\Contract\ToolInterface;
 use CarmeloSantana\PHPAgents\Enum\ProviderFinishReason;
 use CarmeloSantana\PHPAgents\Enum\Role;
 use CarmeloSantana\PHPAgents\Image\Internal\PublicImageDownloader;
+use CarmeloSantana\PHPAgents\Provider\Stream\Finish;
+use CarmeloSantana\PHPAgents\Provider\Stream\ReasoningDelta;
+use CarmeloSantana\PHPAgents\Provider\Stream\StreamEvent;
+use CarmeloSantana\PHPAgents\Provider\Stream\TextDelta;
+use CarmeloSantana\PHPAgents\Provider\Stream\Tick;
+use CarmeloSantana\PHPAgents\Provider\Stream\ToolArguments;
+use CarmeloSantana\PHPAgents\Provider\Stream\ToolInputDelta;
+use CarmeloSantana\PHPAgents\Provider\Stream\ToolInputEnd;
+use CarmeloSantana\PHPAgents\Provider\Stream\ToolInputStart;
 use CarmeloSantana\PHPAgents\Schema\JsonSchemaRepair;
 use CarmeloSantana\PHPAgents\Tool\ToolCall;
 use Psr\Log\LoggerInterface;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
+use Symfony\Contracts\HttpClient\ResponseInterface;
 
 /**
  * Native provider for Google Gemini models.
@@ -92,125 +102,226 @@ final class GeminiProvider extends AbstractProvider
 
     public function chat(array $messages, array $tools = [], array $options = []): Response
     {
+        $operation = $this->usageOperation($options, 'chat');
         $payload = $this->buildPayload($messages, $tools, $options);
+        $requestOptions = $this->requestLimits->apply([
+            'headers' => $this->headers(),
+            'json' => $payload,
+        ]);
+        $data = [];
+        $result = null;
+        $start = $this->startClock();
 
-        $response = $this->httpClient->request(
-            'POST',
-            "{$this->baseUrl}/models/{$this->model}:generateContent",
-            $this->requestLimits->apply([
-                'headers' => $this->headers(),
-                'json' => $payload,
-            ]),
-        );
+        try {
+            $response = $this->httpClient->request('POST', "{$this->baseUrl}/models/{$this->model}:generateContent", $requestOptions);
+            $data = $this->decodeResponse($response);
+            $result = $this->parseResponse($data);
 
-        return $this->parseResponse($this->decodeResponse($response));
+            return $result;
+        } finally {
+            $this->reportGenerationUsage(
+                $operation,
+                $start,
+                $data['responseId'] ?? null,
+                $data['modelVersion'] ?? null,
+                $result === null ? $this->usageAfterParseFailure($data) : $result->usage,
+                $result->finishReason ?? ProviderFinishReason::Error,
+            );
+        }
     }
 
-    public function stream(array $messages, array $tools = [], array $options = []): iterable
+    /** @param array<string, mixed> $data */
+    private function usageAfterParseFailure(array $data): ?Usage
     {
-        $payload = $this->buildPayload($messages, $tools, $options);
+        try {
+            return $this->parseUsage($data);
+        } catch (\Throwable) {
+            // Usage recovery is best-effort so the original parse error can propagate.
+            return null;
+        }
+    }
 
-        $response = $this->httpClient->request(
-            'POST',
-            "{$this->baseUrl}/models/{$this->model}:streamGenerateContent?alt=sse",
-            $this->requestLimits->apply([
-                'headers' => $this->headers(),
-                'json' => $payload,
-            ]),
+    public function streamEvents(array $messages, array $tools = [], array $options = []): iterable
+    {
+        $operation = $this->usageOperation($options, 'stream');
+        $payload = $this->buildPayload($messages, $tools, $options);
+        $requestOptions = $this->requestLimits->apply([
+            'headers' => $this->headers(),
+            'json' => $payload,
+        ]);
+        $usage = $responseId = $modelVersion = null;
+        $finished = false;
+        $start = $this->startClock();
+
+        try {
+            $response = $this->httpClient->request('POST', "{$this->baseUrl}/models/{$this->model}:streamGenerateContent?alt=sse", $requestOptions);
+            $events = $this->readStreamEvents($response, $usage, $responseId, $modelVersion);
+            foreach (self::cancelOnAbandon($response, $events) as $event) {
+                if ($event instanceof Finish) {
+                    $finished = true;
+                    $this->reportGenerationUsage($operation, $start, $responseId, $modelVersion, $event->usage, $event->reason);
+                }
+
+                yield $event;
+            }
+        } finally {
+            if (!$finished) {
+                $this->reportGenerationUsage($operation, $start, $responseId, $modelVersion, $usage, ProviderFinishReason::Error);
+            }
+        }
+    }
+
+    private function reportGenerationUsage(
+        string $operation,
+        int $start,
+        mixed $responseId,
+        mixed $modelVersion,
+        ?Usage $usage,
+        ProviderFinishReason $reason,
+    ): void {
+        $failed = self::finishedFailed($reason);
+        $requestedModel = $this->getModel();
+        $this->reportUsage(new UsageReport(
+            operation: $operation,
+            provider: 'GeminiProvider',
+            requestedModel: $requestedModel,
+            model: !$failed && is_string($modelVersion) && $modelVersion !== '' ? $modelVersion : $requestedModel,
+            usage: $usage,
+            requestId: null,
+            responseId: is_string($responseId) ? $responseId : null,
+            finishReason: $reason,
+            durationMs: $this->elapsedMs($start),
+            failed: $failed,
+        ));
+    }
+
+    /**
+     * The events of the response streamEvents() requested; cancelOnAbandon() closes it.
+     *
+     * @return \Generator<int, StreamEvent, mixed, void>
+     */
+    private function readStreamEvents(
+        ResponseInterface $response,
+        ?Usage &$usage,
+        ?string &$responseId,
+        ?string &$modelVersion,
+    ): \Generator {
+        // Each chunk's parts, in order:
+        //   text                → TextDelta (ReasoningDelta when `thought: true`)
+        //   functionCall        → ToolInputStart, one ToolInputDelta with the whole JSON
+        //                         arguments, ToolInputEnd (thoughtSignature in its metadata)
+        // A chunk whose finish reason is ContentFilter, Error or MaxTokens emits no tool events.
+        // The first chunk with a candidate finishReason or a promptFeedback.blockReason ends the
+        // answer: later parts are ignored, but later usageMetadata still replaces the usage, so
+        // the single Finish is yielded at EOF. Gemini has no tool-use finish reason: a Stop
+        // finish after any functionCall part is ToolUse, and Error when a call had no name or its
+        // arguments were not a JSON object. A stream that ends without a finish yields Finish(Error).
+        $callCount = 0;
+        $invalidArguments = false;
+        /** @var array{reason: ProviderFinishReason, raw: string}|null $finish */
+        $finish = null;
+
+        $parser = new SseStreamParser(
+            $this->httpClient,
+            $response,
+            SseStreamParser::DEFAULT_MAX_LINE_BYTES,
+            $this->requestLimits->tickInterval,
+            $this->requestLimits->idleTimeout,
         );
 
-        $parser = new SseStreamParser($this->httpClient, $response);
-        $toolCallCounter = 0;
-        $finished = false;
-
         foreach ($parser->events() as $json) {
-            // A terminal candidate ended the answer: later parts and tool calls are ignored.
-            if ($finished) {
-                $usage = $this->parseUsageMetadata($json);
-                if ($usage !== null) {
-                    yield new Response(content: '', finishReason: ProviderFinishReason::Stop, toolCalls: [], model: $this->model, usage: $usage);
-                }
+            if ($json instanceof Tick) {
+                yield $json;
+
+                continue;
+            }
+
+            if (is_string($json['responseId'] ?? null)) {
+                $responseId = $json['responseId'];
+            }
+            if (is_string($json['modelVersion'] ?? null)) {
+                $modelVersion = $json['modelVersion'];
+            }
+            $usage = $this->parseUsage($json) ?? $usage;
+
+            if ($finish !== null) {
                 continue;
             }
 
             $candidate = $json['candidates'][0] ?? [];
             $parts = $candidate['content']['parts'] ?? [];
-            $finishReason = $this->finishReasonOf($json);
-            $finished = isset($candidate['finishReason']) || isset($json['promptFeedback']['blockReason']);
-
-            $text = '';
-            $reasoning = '';
-            $toolCalls = [];
+            $reason = $this->finishReasonOf($json);
+            $dropsToolCalls = $this->dropsToolCalls($reason);
 
             foreach ($parts as $part) {
-                if (isset($part['text'])) {
-                    // Thought parts (thinkingConfig.includeThoughts = true) have thought: true
-                    if (($part['thought'] ?? false) === true) {
-                        $reasoning .= $part['text'];
-                    } else {
-                        $text .= $part['text'];
+                if (is_string($part['text'] ?? null)) {
+                    if ($part['text'] === '') {
+                        continue;
                     }
-                } elseif (isset($part['functionCall'])) {
-                    $name = $part['functionCall']['name'];
-                    $metadata = [];
-                    if (isset($part['thoughtSignature'])) {
-                        $metadata['thoughtSignature'] = $part['thoughtSignature'];
+                    yield ($part['thought'] ?? false) === true
+                        ? new ReasoningDelta($part['text'])
+                        : new TextDelta($part['text']);
+                } elseif (isset($part['functionCall']) && !$dropsToolCalls) {
+                    $index = $callCount++;
+                    $id = sprintf('g%08x', $index);
+                    $name = is_string($part['functionCall']['name'] ?? null) ? $part['functionCall']['name'] : '';
+                    $argumentsJson = ToolArguments::toJson($part['functionCall']['args'] ?? []);
+
+                    yield new ToolInputStart($index, $id, $name);
+
+                    if ($name === '') {
+                        $this->logger?->debug('Gemini functionCall has no name; the call is dropped');
+                        $invalidArguments = true;
+
+                        continue;
                     }
-                    $toolCalls[] = new ToolCall(
-                        id: sprintf('g%08x', $toolCallCounter++),
-                        name: $name,
-                        arguments: $part['functionCall']['args'] ?? [],
-                        metadata: $metadata,
-                    );
+
+                    // Checked before the delta, so arguments over a cap are never yielded.
+                    $arguments = ToolArguments::decode($argumentsJson, $this->requestLimits);
+                    if ($arguments === null) {
+                        $this->logger?->debug('Tool {tool} arguments ({length} bytes) are not a JSON object; the call is dropped', [
+                            'tool' => $name,
+                            'length' => strlen($argumentsJson),
+                        ]);
+                        $invalidArguments = true;
+
+                        continue;
+                    }
+
+                    yield new ToolInputDelta($index, $id, $argumentsJson);
+                    $metadata = isset($part['thoughtSignature']) ? ['thoughtSignature' => $part['thoughtSignature']] : [];
+                    yield new ToolInputEnd($index, $id, $name, $arguments, $metadata);
                 }
             }
 
-            // Yield reasoning separately so the agent can emit agent.reasoning events
-            if ($reasoning !== '') {
-                yield new Response(
-                    content: '',
-                    finishReason: ProviderFinishReason::Stop,
-                    toolCalls: [],
-                    model: $this->model,
-                    reasoning: $reasoning,
-                );
-            }
-
-            // A blocked, failed or truncated (MAX_TOKENS) candidate emits no tool calls.
-            if ($this->dropsToolCalls($finishReason)) {
-                $toolCalls = [];
-            }
-
-            if (!empty($toolCalls)) {
-                yield new Response(
-                    content: $text,
-                    finishReason: ProviderFinishReason::ToolUse,
-                    toolCalls: $toolCalls,
-                    model: $this->model,
-                    usage: $this->parseUsageMetadata($json),
-                );
+            $rawFinish = $candidate['finishReason'] ?? null;
+            $blockReason = $json['promptFeedback']['blockReason'] ?? null;
+            if ($rawFinish === null && $blockReason === null) {
                 continue;
             }
 
-            if ($text !== '' || $finishReason !== ProviderFinishReason::Stop) {
-                yield new Response(
-                    content: $text,
-                    finishReason: $finishReason,
-                    toolCalls: [],
-                    model: $this->model,
-                    usage: $this->parseUsageMetadata($json),
-                );
+            if ($reason === ProviderFinishReason::Stop && $callCount > 0) {
+                $reason = $invalidArguments ? ProviderFinishReason::Error : ProviderFinishReason::ToolUse;
             }
+
+            $finish = [
+                'reason' => $reason,
+                'raw' => match (true) {
+                    is_string($rawFinish) => $rawFinish,
+                    is_string($blockReason) => $blockReason,
+                    default => '',
+                },
+            ];
         }
 
-        // EOF without a finishReason or a blocked prompt: the answer is incomplete.
-        if (!$finished) {
-            yield new Response(content: '', finishReason: ProviderFinishReason::Error, toolCalls: [], model: $this->model);
-        }
+        yield $finish === null
+            ? new Finish(ProviderFinishReason::Error, usage: $usage, model: $this->model)
+            : new Finish($finish['reason'], $finish['raw'], $usage, $this->model);
     }
 
     public function structured(array $messages, string $schema, array $options = []): mixed
     {
+        $options[UsageReport::OPERATION_OPTION] = 'structured';
         $schemaData = json_decode($schema, true);
         if ($schemaData === null) {
             return $this->chat($messages, [], $options);
@@ -765,6 +876,7 @@ final class GeminiProvider extends AbstractProvider
         $toolCalls = [];
 
         $callIndex = 0;
+        $droppedCalls = false;
         foreach ($parts as $part) {
             if (isset($part['text'])) {
                 // Thought parts (thinkingConfig.includeThoughts = true) have thought: true
@@ -774,15 +886,30 @@ final class GeminiProvider extends AbstractProvider
                     $content .= $part['text'];
                 }
             } elseif (isset($part['functionCall'])) {
-                $name = $part['functionCall']['name'];
+                $name = is_string($part['functionCall']['name'] ?? null) ? $part['functionCall']['name'] : '';
                 $metadata = [];
                 if (isset($part['thoughtSignature'])) {
                     $metadata['thoughtSignature'] = $part['thoughtSignature'];
                 }
+                $id = sprintf('g%08x', $callIndex++);
+                if ($name === '') {
+                    $this->logger?->debug('Gemini functionCall has no name; the call is dropped');
+                    $droppedCalls = true;
+
+                    continue;
+                }
+                $arguments = ToolArguments::fromDecoded($part['functionCall']['args'] ?? null, $this->requestLimits);
+                if ($arguments === null) {
+                    $this->logger?->debug('Gemini tool {tool} arguments are not a JSON object; the call is dropped', ['tool' => $name]);
+                    $droppedCalls = true;
+
+                    continue;
+                }
+
                 $toolCalls[] = new ToolCall(
-                    id: sprintf('g%08x', $callIndex++),
+                    id: $id,
                     name: $name,
-                    arguments: $part['functionCall']['args'] ?? [],
+                    arguments: $arguments,
                     metadata: $metadata,
                 );
             }
@@ -792,8 +919,11 @@ final class GeminiProvider extends AbstractProvider
 
         // Tool calls make it ToolUse, unless the candidate was blocked,
         // failed or cut off at MAX_TOKENS: then no tool calls are emitted.
+        // A dropped call makes what would have been ToolUse an Error, as in the stream.
         if ($this->dropsToolCalls($finishReason)) {
             $toolCalls = [];
+        } elseif ($droppedCalls) {
+            $finishReason = ProviderFinishReason::Error;
         } elseif (!empty($toolCalls)) {
             $finishReason = ProviderFinishReason::ToolUse;
         }
@@ -803,7 +933,7 @@ final class GeminiProvider extends AbstractProvider
             finishReason: $finishReason,
             toolCalls: $toolCalls,
             model: $this->model,
-            usage: $this->parseUsageMetadata($data),
+            usage: $this->parseUsage($data),
             reasoning: $reasoning,
         );
     }
@@ -845,25 +975,38 @@ final class GeminiProvider extends AbstractProvider
     }
 
     /**
-     * Parse usage metadata from Gemini response.
+     * Usage from a response or stream chunk's usageMetadata, or null when it reports
+     * no counts. promptTokenCount already includes cached content; completion is
+     * candidates plus thoughts.
      *
      * @param array<string, mixed> $data
      */
-    private function parseUsageMetadata(array $data): ?Usage
+    private function parseUsage(array $data): ?Usage
     {
         $usage = $data['usageMetadata'] ?? null;
-        if ($usage === null) {
+        if (!is_array($usage)) {
             return null;
         }
 
-        $prompt = $usage['promptTokenCount'] ?? 0;
-        $completion = $usage['candidatesTokenCount'] ?? 0;
-        $total = $usage['totalTokenCount'] ?? ($prompt + $completion);
+        $count = static fn(mixed $value): ?int => is_int($value) ? $value : null;
+        $prompt = $count($usage['promptTokenCount'] ?? null);
+        $candidates = $count($usage['candidatesTokenCount'] ?? null);
+        $thoughts = $count($usage['thoughtsTokenCount'] ?? null);
+        $total = $count($usage['totalTokenCount'] ?? null);
+        $cached = $count($usage['cachedContentTokenCount'] ?? null);
+
+        if ($prompt === null && $candidates === null && $thoughts === null && $total === null) {
+            return null;
+        }
+
+        $completion = ($candidates ?? 0) + ($thoughts ?? 0);
 
         return new Usage(
-            promptTokens: $prompt,
+            promptTokens: $prompt ?? 0,
             completionTokens: $completion,
-            totalTokens: $total,
+            totalTokens: $total ?? ($prompt ?? 0) + $completion,
+            cacheReadTokens: $cached,
+            reasoningTokens: $thoughts,
         );
     }
 }
