@@ -2,7 +2,7 @@
 
 All notable changes to AiConnector will be documented here.
 
-## 1.4.0 — Unreleased
+## 1.4.0 — 2026-11-27
 
 ### Added
 - Model routing: AI Connector decides which profile each AI request uses. The most specific choice wins: a person's pick (where a plugin offers the picker), the project's profile, the feature's assignment, the plugin's assignment, then the global default. A deleted or not-ready profile is skipped and logged, and resolution falls to the next level. A project profile an admin no longer makes available stops applying, and a pick counts only for a registered feature.
