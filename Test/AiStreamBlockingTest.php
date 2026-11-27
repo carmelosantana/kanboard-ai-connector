@@ -138,7 +138,12 @@ class AiStreamBlockingTest extends Base
     /** A real Symfony HTTP exception for $status, obtained through MockHttpClient; its body is never read. */
     private static function httpError(int $status): HttpExceptionInterface
     {
-        $response = (new MockHttpClient(new MockResponse('{"error":"secret body"}', ['http_code' => $status])))
+        $response = (new MockHttpClient(new MockResponse('{"error":"secret body"}', [
+            'http_code' => $status,
+            // JSON, so Symfony puts the body's error text into the exception message: a regression
+            // that logged getMessage() or read the body would show 'secret body' in the log.
+            'response_headers' => ['content-type: application/json'],
+        ])))
             ->request('POST', 'http://scripted.invalid/v1/chat/completions');
         try {
             $response->getHeaders();
@@ -382,7 +387,7 @@ class AiStreamBlockingTest extends Base
     #[\PHPUnit\Framework\Attributes\DataProvider('rejectedStatuses')]
     public function testRejectedStreamFallsBackOnceUnderTheSameCharge(int $status): void
     {
-        $provider = new ScriptedProvider([new Tick(), new Tick()], self::httpError($status));
+        $provider = new ScriptedProvider([new Tick(), new Tick(), fn () => $this->now = 40.0], self::httpError($status));
         $provider->chatAnswer = self::answer('blocking answer', new UpUsage(2, 3, 5));
         $events = $this->drain($provider);
 
@@ -396,7 +401,8 @@ class AiStreamBlockingTest extends Base
 
         $this->assertSame(['streamEvents', 'chat'], array_column($provider->calls, 'method'), 'two provider calls');
         $this->assertSame([], $provider->calls[1]['args'][1]);
-        $this->assertEquals(new RequestLimits(idleTimeout: 60.0, maxDuration: 300.0, tickInterval: 0.25), $provider->calls[1]['limits'], 'the same limits');
+        $this->assertEquals(new RequestLimits(idleTimeout: 260.0, maxDuration: 260.0, tickInterval: 0.25), $provider->calls[1]['limits'],
+            'a blocking answer sends nothing until done: idle = max = what is left of the 300 s');
         $this->assertSame(1, $this->countRows(), 'one count row: charged once');
         $this->assertSame(1, (int) $this->container['db']->table(AiQuota::ATTEMPTS_TABLE)->count(), 'one attempt');
         $this->assertSame('finished', $this->attemptStatus());
@@ -408,6 +414,14 @@ class AiStreamBlockingTest extends Base
         foreach ($this->logged as $line) {
             $this->assertStringNotContainsString('secret body', $line, 'the body is never read or logged');
         }
+    }
+
+    public function testFallbackGetsAtLeastOneSecond(): void
+    {
+        $provider = new ScriptedProvider([fn () => $this->now = 299.5], self::httpError(400));
+        $provider->chatAnswer = self::answer();
+        $this->drain($provider);
+        $this->assertEquals(new RequestLimits(idleTimeout: 1.0, maxDuration: 1.0, tickInterval: 0.25), $provider->calls[1]['limits']);
     }
 
     public function testWrappedRejectionFallsBack(): void
@@ -488,10 +502,21 @@ class AiStreamBlockingTest extends Base
         $provider = new ScriptedProvider([fn () => $cancel->cancelled = true], self::httpError(400));
         $provider->chatAnswer = self::answer();
         $events = $this->drain($provider, $cancel);
-        $this->assertSame(['Started', 'Error'], self::shape($events));
-        $this->assertSame('provider_error', $events[1]->code);
+        $this->assertSame(['Started', 'Finish'], self::shape($events));
+        $this->assertSame('cancelled', $events[1]->reason, 'cancelled before a Finish arrived');
         $this->assertSame(['streamEvents'], array_column($provider->calls, 'method'));
         $this->assertSame([], $this->logLines('streaming rejected'));
+        $this->assertSame([], $this->logLines('AI stream failed'));
+        $this->assertSame('finished', $this->attemptStatus());
+
+        // Cancelled, then any other throw: Finish(cancelled) too.
+        $this->container['db']->table(AiQuota::ATTEMPTS_TABLE)->remove();
+        $cancel->cancelled = false;
+        $provider = new ScriptedProvider([fn () => $cancel->cancelled = true], new TransportException('aborted'));
+        $events = $this->drain($provider, $cancel);
+        $this->assertSame(['Started', 'Finish'], self::shape($events));
+        $this->assertSame('cancelled', $events[1]->reason);
+        $this->assertSame([], $this->logLines('AI stream failed'));
 
         // Cancelled and seen on a tick: the stream stops with Finish(cancelled), nothing follows.
         $this->container['db']->table(AiQuota::ATTEMPTS_TABLE)->remove();

@@ -209,14 +209,27 @@ class AiStream extends Base
                 }
             }
         } catch (\Throwable $e) {
-            // Rejected before any output and not cancelled: a protocol fallback, not a retry.
-            $rejected = $output || $request->cancel?->isCancelled() ? null : EventMapper::rejectedStatus($e);
-            $terminal = $rejected === null ? $this->failure($e, $started, $request, $userId) : null;
+            if ($request->cancel?->isCancelled()) {
+                // Cancelled before a Finish arrived: whatever the request then threw, it was cancelled.
+                $terminal = new Finish('cancelled', $model, null, null);
+            } else {
+                // Rejected before any output: a protocol fallback, not a retry.
+                $rejected = $output ? null : EventMapper::rejectedStatus($e);
+                $terminal = $rejected === null ? $this->failure($e, $started, $request, $userId) : null;
+            }
         }
 
         if ($rejected !== null) {
             $this->logger->info(sprintf('[AiConnector] AI stream: streaming rejected (HTTP %d), blocking fallback: user %d, feature %s',
                 $rejected, $userId, self::safeFeature($request->feature)));
+            // A blocking answer sends nothing until it is complete, so the idle limit is the time
+            // left; the maximum duration counts from Started, not from the fallback.
+            $remaining = max(1.0, $request->maxDuration() - (($this->clock)() - $started));
+            $provider = $provider->withRequestLimits(new RequestLimits(
+                idleTimeout: $remaining,
+                maxDuration: $remaining,
+                tickInterval: 0.25,
+            ));
             yield from $blocking->textAnswer($provider, $messages);
             return;
         }
