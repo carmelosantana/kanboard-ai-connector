@@ -220,13 +220,21 @@ class ProviderRegistry extends Base
         $registered = $this->features()[$feature] ?? null;
         $locked = $registered !== null && in_array($feature, $assigned['locked'], true);
 
+        $offered = $this->offeredIds();
         $levels = [];
-        if (! $locked && $pick !== null && $pick !== '' && $this->pickAllowed($feature, $projectId, $locked)
-            && in_array($pick, $this->offeredIds(), true)) {
+        // Picks count only for registered features, so a mistyped feature cannot bypass routing.
+        if ($registered !== null && ! $locked && $pick !== null && $pick !== ''
+            && $this->pickAllowed($feature, $projectId, $locked) && in_array($pick, $offered, true)) {
             $levels['pick'] = $pick;
         }
         if (! $locked && $projectId !== null) {
-            $levels['project'] = $routing->projectProfile($projectId);
+            $projectProfile = $routing->projectProfile($projectId);
+            // A project profile must still be offered: an admin can withdraw a profile later.
+            if ($projectProfile !== '' && ! in_array($projectProfile, $offered, true) && $this->profileReady($projectProfile)) {
+                $this->logSkip($feature, 'project', $projectProfile, 'not offered');
+            } else {
+                $levels['project'] = $projectProfile;
+            }
         }
         if ($registered !== null) {
             $levels['feature'] = $assigned['features'][$feature] ?? '';
@@ -255,10 +263,11 @@ class ProviderRegistry extends Base
      */
     public function pickerOptions(string $feature, ?int $projectId = null): array
     {
-        $locked = isset($this->features()[$feature])
+        $registered = isset($this->features()[$feature]);
+        $locked = $registered
             && in_array($feature, (new ModelRouting($this->container))->assignments()['locked'], true);
         return [
-            'show' => $this->pickAllowed($feature, $projectId, $locked),
+            'show' => $registered && $this->pickAllowed($feature, $projectId, $locked),
             'profiles' => $this->offeredProfiles(),
             'selected' => $this->resolve($feature, $projectId),
         ];
@@ -319,10 +328,11 @@ class ProviderRegistry extends Base
         return $projectId === null || (new ModelRouting($this->container))->membersMaySwitch($projectId);
     }
 
-    private function logSkip(string $feature, string $level, string $id): void
+    private function logSkip(string $feature, string $level, string $id, ?string $reason = null): void
     {
-        $reason = $this->findProfile($id) === null ? 'missing' : 'not ready';
-        $line = sprintf('[AiConnector] routing: %s skipped %s profile %s (%s)', $feature, $level, $id, $reason);
+        $reason ??= $this->findProfile($id) === null ? 'missing' : 'not ready';
+        $clean = fn (string $v) => preg_replace('/[^a-z0-9._-]/i', '', $v);
+        $line = sprintf('[AiConnector] routing: %s skipped %s profile %s (%s)', $clean($feature), $level, $clean($id), $reason);
         if (! isset($this->loggedSkips[$line])) {
             $this->loggedSkips[$line] = true;
             $this->logger->info($line);

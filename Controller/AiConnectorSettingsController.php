@@ -197,7 +197,8 @@ class AiConnectorSettingsController extends BaseController
         $profiles = $registry->getProfiles();
         $ids = array_column($profiles, 'id');
 
-        [$errors] = $routing->validate($values, $registry->features(), $ids);
+        // One feature list and one validation for the whole save.
+        [$errors, $clean] = $routing->validate($values, $registry->features(), $ids);
         $available = is_array($values['available'] ?? null) ? $values['available'] : [];
         foreach (array_keys($available) as $id) {
             if (! in_array((string) $id, $ids, true)) {
@@ -214,9 +215,16 @@ class AiConnectorSettingsController extends BaseController
         foreach ($profiles as $i => $p) {
             $profiles[$i]['available'] = isset($available[$p['id']]);
         }
-        $this->configModel->save([ProviderRegistry::PROFILES_KEY => json_encode(array_values($profiles))]);
-        $routing->saveAssignments($values, $registry->features(), $ids);
+        $saved = $this->configModel->save([
+            ProviderRegistry::PROFILES_KEY => json_encode(array_values($profiles)),
+            ModelRouting::CONFIG_KEY => json_encode($clean),
+        ]);
         $this->memoryCache->flush();
+        if (! $saved) {
+            $this->flash->failure(t('Model routing not saved.'));
+            $this->redirectToShow();
+            return;
+        }
         $this->flash->success(t('Model routing saved.'));
         $this->redirectToShow();
     }

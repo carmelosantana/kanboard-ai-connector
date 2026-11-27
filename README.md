@@ -127,7 +127,8 @@ AI Connector decides which profile each AI request uses. The most specific choic
 4. **The global default** profile.
 
 A locked feature skips 1 and 2 and always uses its assignment. A deleted profile,
-or one without a key, is skipped (and logged), and the next level is used.
+or one without a key, is skipped (and logged), and the next level is used. A
+project profile an admin no longer makes available is skipped too.
 
 **Settings → AI Connector → Model routing** (admins):
 

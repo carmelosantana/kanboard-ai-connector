@@ -179,4 +179,35 @@ class ResolveTest extends Base
     {
         $this->assertSame('A', $this->resolve('t.one', null, 'D'));
     }
+    public function testAProjectProfileNoLongerAvailableFallsBack(): void
+    {
+        // B was offered when the manager chose it; the admin then made it unavailable.
+        $this->projectProfile('B');
+        $this->setting(ProviderRegistry::PROFILES_KEY, json_encode([
+            ['id' => 'A', 'label' => 'A', 'provider' => 'ollama', 'model' => 'm', 'base_url' => ''],
+            ['id' => 'B', 'label' => 'B', 'provider' => 'ollama', 'model' => 'm', 'base_url' => ''],
+            ['id' => 'C', 'label' => 'C', 'provider' => 'ollama', 'model' => 'm', 'base_url' => '', 'available' => true],
+        ]));
+        $this->route([], ['t.one' => 'C']);
+
+        $this->assertSame('C', $this->resolve('t.one', $this->project));
+        $this->assertContains('[AiConnector] routing: t.one skipped project profile B (not offered)', $this->logged);
+    }
+
+    public function testAnUnregisteredFeatureIgnoresPicks(): void
+    {
+        $this->assertSame('A', $this->resolve('x.y', null, 'C'));
+        $this->assertFalse((new ProviderRegistry($this->container))->pickerOptions('x.y')['show']);
+    }
+
+    public function testControlCharactersInAFeatureNeverReachTheLog(): void
+    {
+        $this->projectProfile('D');
+        $this->resolve("x.y\n[forged] line", $this->project);
+
+        $this->assertNotEmpty($this->logged);
+        foreach ($this->logged as $line) {
+            $this->assertDoesNotMatchRegularExpression('/[\x00-\x1f]/', $line);
+        }
+    }
 }

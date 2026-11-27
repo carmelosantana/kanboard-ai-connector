@@ -153,4 +153,19 @@ class RoutingSettingsTest extends Base
             $this->assertStringContainsString($needle, $template);
         }
     }
+    public function testOneFeatureListIsUsedForTheWholeSave(): void
+    {
+        // A listener whose features change between calls must not leave a half-saved form.
+        $calls = 0;
+        $this->container['hook']->on(ProviderRegistry::FEATURES_HOOK, function () use (&$calls) {
+            return ++$calls === 1 ? [['id' => 't.two', 'label' => 'Two', 'plugin' => 'T']] : [];
+        });
+        $form = $this->validForm();
+        $form['locked'][] = 't.two';
+        $this->stubSession(true, $form);
+        $this->saveRouting();
+
+        $this->assertSame(['t.one', 't.two'], (new ModelRouting($this->container))->assignments()['locked']);
+        $this->assertSame(1, $calls);
+    }
 }
