@@ -202,6 +202,82 @@ class ProviderRegistry extends Base
         return $out;
     }
 
+    /** Routing skips already logged by this registry (one log line per skip per request). */
+    private array $loggedSkips = [];
+
+    /**
+     * The profile id an AI request for $feature uses, or '' when no level has a ready profile.
+     * Order: a locked feature uses its assignment, then its plugin's, then the global default;
+     * otherwise a valid pick, then the project's profile, the feature's, the plugin's and the
+     * global default. A pick counts only when the picker would be shown for this feature and
+     * project and the pick is one of the offered profiles; any other pick is ignored. A level
+     * whose profile is missing or not ready is skipped and logged.
+     */
+    public function resolve(string $feature, ?int $projectId = null, ?string $pick = null): string
+    {
+        $routing = new ModelRouting($this->container);
+        $assigned = $routing->assignments();
+        $registered = $this->features()[$feature] ?? null;
+        $locked = $registered !== null && in_array($feature, $assigned['locked'], true);
+
+        $levels = [];
+        if (! $locked && $pick !== null && $pick !== '' && $this->pickAllowed($feature, $projectId, $locked)
+            && in_array($pick, $this->offeredIds(), true)) {
+            $levels['pick'] = $pick;
+        }
+        if (! $locked && $projectId !== null) {
+            $levels['project'] = $routing->projectProfile($projectId);
+        }
+        if ($registered !== null) {
+            $levels['feature'] = $assigned['features'][$feature] ?? '';
+            $levels['plugin'] = $assigned['plugins'][$registered['plugin']] ?? '';
+        }
+        $levels['global'] = $this->getDefaultProfileId();
+
+        foreach ($levels as $level => $id) {
+            if ($id === '') {
+                continue;
+            }
+            if ($this->profileReady($id)) {
+                return $id;
+            }
+            $this->logSkip($feature, $level, $id);
+        }
+        return '';
+    }
+
+    /** Ready profiles a person may pick: those marked available, plus the global default. */
+    private function offeredIds(): array
+    {
+        $default = $this->getDefaultProfileId();
+        $ids = [];
+        foreach ($this->getProfiles() as $p) {
+            if (($p['available'] || $p['id'] === $default) && $this->profileReady($p['id'])) {
+                $ids[] = $p['id'];
+            }
+        }
+        return $ids;
+    }
+
+    /** Whether the picker is shown: unlocked, two or more offered, and the project allows switching. */
+    private function pickAllowed(string $feature, ?int $projectId, bool $locked): bool
+    {
+        if ($locked || count($this->offeredIds()) < 2) {
+            return false;
+        }
+        return $projectId === null || (new ModelRouting($this->container))->membersMaySwitch($projectId);
+    }
+
+    private function logSkip(string $feature, string $level, string $id): void
+    {
+        $reason = $this->findProfile($id) === null ? 'missing' : 'not ready';
+        $line = sprintf('[AiConnector] routing: %s skipped %s profile %s (%s)', $feature, $level, $id, $reason);
+        if (! isset($this->loggedSkips[$line])) {
+            $this->loggedSkips[$line] = true;
+            $this->logger->info($line);
+        }
+    }
+
     /** One full profile struct, or null. */
     public function findProfile(string $id): ?array
     {
