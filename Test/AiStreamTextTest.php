@@ -173,7 +173,7 @@ class AiStreamTextTest extends Base
         $this->assertSame([], $call['args'][1], 'no tools');
         $this->assertSame([], $call['args'][2], 'no options');
         $this->assertEquals(new RequestLimits(idleTimeout: 60.0, maxDuration: 300.0, tickInterval: 0.25), $call['limits']);
-        $this->assertSame('completed', $provider->ended);
+        $this->assertSame('abandoned', $provider->ended, 'reading stops at the Finish');
     }
 
     public function testRequestLimitsComeFromTheClampedRequest(): void
@@ -301,14 +301,61 @@ class AiStreamTextTest extends Base
         $this->assertSame('abandoned', $provider->ended);
     }
 
-    public function testFinishAlreadyReceivedBeatsALateCancel(): void
+    public function testCancelRaisedJustBeforeTheFinishIsReadLetsTheFinishStand(): void
     {
         $cancel = $this->cancellation();
-        // The cancel lands while the provider's Finish is on its way: once in hand, the Finish stands.
+        // The token is raised between the last delta and the Finish, with no event in between to
+        // see it: the Finish is taken without a token check, so the provider's answer stands.
         $provider = new ScriptedProvider([new UpText('done'), fn () => $cancel->cancelled = true, self::finish()]);
         $events = $this->drain($provider, $cancel);
         $this->assertSame(['Started', 'TextDelta', 'Finish'], self::shape($events));
         $this->assertSame('stop', $events[2]->reason);
+    }
+
+    public function testReadingStopsRightAfterTheFinish(): void
+    {
+        $cancel = $this->cancellation();
+        $readOn = false;
+        $provider = new ScriptedProvider([
+            new UpText('done'),
+            self::finish(),
+            function () use (&$readOn, $cancel) {
+                $readOn = true;
+                $cancel->cancelled = true;
+            },
+            new UpText('after the finish'),
+        ]);
+        $events = $this->drain($provider, $cancel);
+        $this->assertSame(['Started', 'TextDelta', 'Finish'], self::shape($events));
+        $this->assertSame('stop', $events[2]->reason, 'a received Finish wins');
+        $this->assertFalse($readOn, 'nothing past the Finish is read');
+        $this->assertSame('abandoned', $provider->ended);
+    }
+
+    public static function transportThrowsAroundMaxDuration(): array
+    {
+        return [
+            'at max duration' => [5.0, 'timeout'],
+            'past max duration' => [7.5, 'timeout'],
+            'before max duration' => [4.9, 'provider_error'],
+        ];
+    }
+
+    /** @dataProvider transportThrowsAroundMaxDuration */
+    #[\PHPUnit\Framework\Attributes\DataProvider('transportThrowsAroundMaxDuration')]
+    public function testTransportThrowAtMaxDurationIsTimeout(float $elapsed, string $code): void
+    {
+        $provider = new ScriptedProvider([fn () => $this->now = $elapsed], new TransportException('Max duration was reached for "http://h/secret".'));
+        $events = iterator_to_array($this->stream($provider, max: 5.0), false);
+        $this->assertSame(['Started', 'Error'], self::shape($events));
+        $this->assertSame($code, $events[1]->code);
+    }
+
+    public function testNonTransportThrowAtMaxDurationStaysProviderError(): void
+    {
+        $provider = new ScriptedProvider([fn () => $this->now = 9.0], new \RuntimeException('max duration secret'));
+        $events = iterator_to_array($this->stream($provider, max: 5.0), false);
+        $this->assertSame('provider_error', end($events)->code);
     }
 
     public function testProgressAtMostOncePerSecond(): void

@@ -23,6 +23,9 @@ final class ScriptedProvider extends AbstractProvider
     /** How the last stream ended: null (not started or still open), 'completed', 'threw' or 'abandoned'. */
     public ?string $ended = null;
 
+    /** What chat() returns or throws; set before the stream starts, so the limited copy has it. */
+    public Response|\Throwable|null $chatAnswer = null;
+
     /** @var array{calls: array, ended: ?string} references to $calls and $ended */
     private array $shared;
 
@@ -65,8 +68,11 @@ final class ScriptedProvider extends AbstractProvider
 
     public function chat(array $messages, array $tools = [], array $options = []): Response
     {
-        $this->calls[] = ['method' => 'chat', 'args' => [$messages, $tools, $options]];
-        throw new \LogicException('ScriptedProvider::chat() is not scripted');
+        $this->calls[] = ['method' => 'chat', 'args' => [$messages, $tools, $options], 'limits' => $this->requestLimits()];
+        if ($this->chatAnswer instanceof \Throwable) {
+            throw $this->chatAnswer;
+        }
+        return $this->chatAnswer ?? throw new \LogicException('ScriptedProvider::chat() is not scripted');
     }
 
     public function structured(array $messages, string $schema, array $options = []): mixed

@@ -13,6 +13,9 @@ final class StructuredDecoder
 {
     private const MAX_DEPTH = 64;
 
+    /** The most bytes of structured JSON AiConnector reads (256 KiB), streamed or blocking. */
+    public const MAX_BYTES = 262144;
+
     /** A JSON object/array document as an array; scalars, invalid JSON and over-deep nesting give null. */
     public static function decode(string $json): ?array
     {

@@ -8,6 +8,7 @@ use Kanboard\Plugin\AiConnector\Model\ProviderRegistry;
 use CarmeloSantana\PHPAgents\Provider\AbstractProvider;
 use CarmeloSantana\PHPAgents\Provider\RequestLimits;
 use CarmeloSantana\PHPAgents\Provider\Stream\Finish as UpstreamFinish;
+use CarmeloSantana\PHPAgents\Provider\Stream\Tick;
 use CarmeloSantana\PHPAgents\Provider\Stream\ToolInputEnd;
 use CarmeloSantana\PHPAgents\Provider\Stream\ToolInputStart;
 use Kanboard\Plugin\AiConnector\Stream\Event\Error;
@@ -17,6 +18,7 @@ use Kanboard\Plugin\AiConnector\Stream\Event\ReasoningDelta;
 use Kanboard\Plugin\AiConnector\Stream\Event\Refused;
 use Kanboard\Plugin\AiConnector\Stream\Event\Started;
 use Kanboard\Plugin\AiConnector\Stream\Event\TextDelta;
+use Kanboard\Plugin\AiConnector\Stream\Internal\BlockingCall;
 use Kanboard\Plugin\AiConnector\Stream\Internal\EventMapper;
 use Kanboard\Plugin\AiConnector\Stream\Internal\MessageMapper;
 use Pimple\Container;
@@ -123,24 +125,34 @@ class AiStream extends Base
      * Started, the mapped provider events and Progress heartbeats, then exactly one terminal
      * event (Finish or Error), after which nothing is yielded. The token is checked on every
      * upstream event, ticks included; a cancel before the provider's Finish stops reading, which
-     * abandons the php-agents generator and so cancels its HTTP request.
+     * abandons the php-agents generator and so cancels its HTTP request. Reading stops at the
+     * provider's Finish too: a cancel after it changes nothing.
+     *
+     * A provider that is not an AbstractProvider gets one blocking call instead. A streamed
+     * request rejected as a request-shape error before any output gets one blocking call on the
+     * same attempt and charge (BlockingCall, no second Started).
      *
      * @return \Generator<int, object>
      */
     private function stream(object $provider, AiRequest $request, string $model, int $userId): \Generator
     {
-        $streaming = $provider instanceof AbstractProvider;
         $started = ($this->clock)();
-        yield new Started($model, $streaming);
+        $messages = MessageMapper::toPhpAgents($request->messages);
+        $blocking = new BlockingCall(
+            $model,
+            onException: fn (\Throwable $e): Error => $this->failure($e, $started, $request, $userId),
+            onFinishError: fn (string $detail) => $this->logFailure('provider_error', $userId, $request->feature, $detail),
+            onDroppedTool: fn (int $index) => $this->logDroppedTool($userId, $request->feature, $index),
+        );
 
-        if ($request->cancel?->isCancelled()) {
-            yield new Finish('cancelled', $model, null, null);
+        if (! $provider instanceof AbstractProvider) {
+            yield from $blocking->text($provider, $messages, $request->cancel);
             return;
         }
-        if (! $streaming) {
-            // The blocking path for providers without native streaming is not built yet.
-            $this->logFailure('provider_error', $userId, $request->feature, 'not a streaming provider');
-            yield EventMapper::error('provider_error');
+
+        yield new Started($model, true);
+        if ($request->cancel?->isCancelled()) {
+            yield new Finish('cancelled', $model, null, null);
             return;
         }
 
@@ -153,20 +165,19 @@ class AiStream extends Base
         $receivedChars = 0;
         $dropped = [];
         $terminal = null;
+        $output = false;
+        $rejected = null;
 
         try {
-            foreach ($provider->streamEvents(MessageMapper::toPhpAgents($request->messages), [], []) as $event) {
-                if ($terminal !== null) {
-                    // Past the provider's Finish (its last event): let its generator end on its own,
-                    // so a completed response is not cancelled; a late cancel changes nothing.
-                    continue;
-                }
+            foreach ($provider->streamEvents($messages, [], []) as $event) {
+                $output = $output || ! $event instanceof Tick;
                 if ($event instanceof UpstreamFinish) {
+                    // The provider's last event: take it and stop reading.
                     $terminal = EventMapper::finish($event, $model);
                     if ($terminal instanceof Error) {
                         $this->logFailure('provider_error', $userId, $request->feature, 'provider finish error');
                     }
-                    continue;
+                    break;
                 }
                 if ($request->cancel?->isCancelled()) {
                     $terminal = new Finish('cancelled', $model, null, null);
@@ -177,8 +188,7 @@ class AiStream extends Base
                     if (isset($dropped[$event->index]) || ! EventMapper::isValidToolCall($event->id, $event->name)) {
                         if (! isset($dropped[$event->index])) {
                             $dropped[$event->index] = true;
-                            $this->logger->info(sprintf('[AiConnector] AI stream dropped a tool call with an invalid name or id: user %d, feature %s, index %d',
-                                $userId, self::safeFeature($request->feature), $event->index));
+                            $this->logDroppedTool($userId, $request->feature, $event->index);
                         }
                         continue;
                     }
@@ -199,17 +209,36 @@ class AiStream extends Base
                 }
             }
         } catch (\Throwable $e) {
-            if ($terminal === null) {
-                $terminal = EventMapper::exception($e);
-                $this->logFailure($terminal->code, $userId, $request->feature, self::shortClass($e));
-            }
+            // Rejected before any output and not cancelled: a protocol fallback, not a retry.
+            $rejected = $output || $request->cancel?->isCancelled() ? null : EventMapper::rejectedStatus($e);
+            $terminal = $rejected === null ? $this->failure($e, $started, $request, $userId) : null;
         }
 
+        if ($rejected !== null) {
+            $this->logger->info(sprintf('[AiConnector] AI stream: streaming rejected (HTTP %d), blocking fallback: user %d, feature %s',
+                $rejected, $userId, self::safeFeature($request->feature)));
+            yield from $blocking->textAnswer($provider, $messages);
+            return;
+        }
         if ($terminal === null) {
             $this->logFailure('provider_error', $userId, $request->feature, 'no finish');
             $terminal = EventMapper::error('provider_error');
         }
         yield $terminal;
+    }
+
+    /** A thrown request as its Error, logged by class: a transport failure at the maximum duration is a timeout. */
+    private function failure(\Throwable $e, float $started, AiRequest $request, int $userId): Error
+    {
+        $error = EventMapper::exception($e, ($this->clock)() - $started >= $request->maxDuration());
+        $this->logFailure($error->code, $userId, $request->feature, self::shortClass($e));
+        return $error;
+    }
+
+    private function logDroppedTool(int $userId, string $feature, int $index): void
+    {
+        $this->logger->info(sprintf('[AiConnector] AI stream dropped a tool call with an invalid name or id: user %d, feature %s, index %d',
+            $userId, self::safeFeature($feature), $index));
     }
 
     private function logFailure(string $code, int $userId, string $feature, string $detail): void
