@@ -271,6 +271,27 @@ class ProviderRegistry extends Base
         ];
     }
 
+    /**
+     * Plugin and feature assignments whose profile is deleted or not ready, for the settings page.
+     *
+     * @return list<array{level:string,key:string,profile:string,reason:string}>
+     */
+    public function brokenAssignments(): array
+    {
+        $out = [];
+        foreach ((new ModelRouting($this->container))->assignments() as $level => $map) {
+            if ($level === 'locked') {
+                continue;
+            }
+            foreach ($map as $key => $id) {
+                if (! $this->profileReady($id)) {
+                    $out[] = ['level' => $level, 'key' => $key, 'profile' => $id, 'reason' => $this->findProfile($id) === null ? 'missing' : 'not ready'];
+                }
+            }
+        }
+        return $out;
+    }
+
     /** Ready profiles a person may pick: those marked available, plus the global default. */
     private function offeredIds(): array
     {

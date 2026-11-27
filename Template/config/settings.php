@@ -143,6 +143,85 @@
 </form>
 
 <hr>
+<h3><?= t('Model routing') ?></h3>
+<p class="form-help">
+    <?= t('Choose which profile each plugin and AI feature uses. The most specific choice wins: a person\'s pick (where offered), the project\'s profile, the feature, the plugin, then the default. A locked feature always uses its assignment. Only profiles available to users can be picked by people and project managers.') ?>
+</p>
+<?php
+$profile_labels = array_column($profiles, 'label', 'id');
+$broken = [];
+foreach ($routing_broken as $b) {
+    $broken[$b['level'] . '.' . $b['key']] = $b['reason'];
+}
+?>
+<form method="post"
+      action="<?= $this->url->href('AiConnectorSettingsController', 'saveRouting', ['plugin' => 'AiConnector']) ?>">
+    <?= $this->form->csrf() ?>
+
+    <h4><?= t('Available to users') ?></h4>
+    <?php foreach ($profiles as $p): ?>
+        <label>
+            <input type="checkbox" name="available[<?= $this->text->e($p['id']) ?>]" value="1" <?= $p['available'] ? 'checked' : '' ?>>
+            <?= $this->text->e($p['label']) ?><?= $p['id'] === $default_id ? ' (' . t('default, always offered') . ')' : '' ?>
+        </label>
+    <?php endforeach ?>
+
+    <?php if (empty($routing_features)): ?>
+        <p class="form-help"><?= t('No installed plugin has registered an AI feature yet.') ?></p>
+    <?php else: ?>
+    <table class="table-striped">
+        <thead>
+            <tr>
+                <th><?= t('Plugin or feature') ?></th>
+                <th><?= t('Profile') ?></th>
+                <th><?= t('Lock') ?></th>
+                <th><?= t('Uses now') ?></th>
+            </tr>
+        </thead>
+        <tbody>
+        <?php foreach ($routing_features as $plugin => $features): ?>
+            <?php $pkey = 'plugins.' . $plugin; $pval = $routing['plugins'][$plugin] ?? ''; ?>
+            <tr>
+                <td><strong><?= $this->text->e($plugin) ?></strong></td>
+                <td>
+                    <select name="plugins[<?= $this->text->e($plugin) ?>]" class="form-select">
+                        <option value=""><?= t('Use the global default') ?></option>
+                        <?php foreach ($profiles as $p): ?>
+                            <option value="<?= $this->text->e($p['id']) ?>" <?= $p['id'] === $pval ? 'selected' : '' ?>><?= $this->text->e($p['label']) ?></option>
+                        <?php endforeach ?>
+                    </select>
+                    <?php if (isset($broken[$pkey])): ?><span class="alert-error"><?= $broken[$pkey] === 'missing' ? t('Profile deleted') : t('Profile not ready') ?></span><?php endif ?>
+                </td>
+                <td></td>
+                <td></td>
+            </tr>
+            <?php foreach ($features as $f): ?>
+                <?php $fkey = 'features.' . $f['id']; $fval = $routing['features'][$f['id']] ?? ''; ?>
+                <tr>
+                    <td>&nbsp;&nbsp;<?= $this->text->e($f['label']) ?> <code><?= $this->text->e($f['id']) ?></code></td>
+                    <td>
+                        <select name="features[<?= $this->text->e($f['id']) ?>]" class="form-select">
+                            <option value=""><?= t('Use the plugin\'s choice') ?></option>
+                            <?php foreach ($profiles as $p): ?>
+                                <option value="<?= $this->text->e($p['id']) ?>" <?= $p['id'] === $fval ? 'selected' : '' ?>><?= $this->text->e($p['label']) ?></option>
+                            <?php endforeach ?>
+                        </select>
+                        <?php if (isset($broken[$fkey])): ?><span class="alert-error"><?= $broken[$fkey] === 'missing' ? t('Profile deleted') : t('Profile not ready') ?></span><?php endif ?>
+                    </td>
+                    <td><input type="checkbox" name="locked[]" value="<?= $this->text->e($f['id']) ?>" aria-label="<?= t('Lock') ?>" <?= in_array($f['id'], $routing['locked'], true) ? 'checked' : '' ?>></td>
+                    <td><?= $this->text->e($profile_labels[$routing_resolved[$f['id']] ?? ''] ?? t('none')) ?></td>
+                </tr>
+            <?php endforeach ?>
+        <?php endforeach ?>
+        </tbody>
+    </table>
+    <?php endif ?>
+    <div class="form-actions">
+        <button type="submit" class="btn btn-blue"><?= t('Save') ?></button>
+    </div>
+</form>
+
+<hr>
 <h3><?= t('AI Limits') ?></h3>
 <p class="form-help">
     <?= t('Every plugin that uses AI through AI Connector (Kensho, Subtask Generator, Time Invoice, Time Report and others) checks these before each request, so no one can run up the provider bill. The hourly limit is shared by all of a person\'s AI features.') ?>

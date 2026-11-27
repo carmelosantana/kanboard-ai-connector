@@ -5,6 +5,7 @@ namespace Kanboard\Plugin\AiConnector\Controller;
 use Kanboard\Controller\BaseController;
 use Kanboard\Core\Controller\AccessForbiddenException;
 use Kanboard\Plugin\AiConnector\Model\AiQuota;
+use Kanboard\Plugin\AiConnector\Model\ModelRouting;
 use Kanboard\Plugin\AiConnector\Model\ProviderRegistry;
 use Kanboard\Plugin\AiConnector\Model\UnsafeUrlException;
 use Kanboard\Plugin\AiConnector\Model\UrlGuard;
@@ -44,6 +45,10 @@ class AiConnectorSettingsController extends BaseController
             'allowed_hosts'  => implode("\n", UrlGuard::parseHostList((string) $this->configModel->get(UrlGuard::ALLOWED_HOSTS_KEY, ''))),
             'allow_private'  => (string) $this->configModel->get(UrlGuard::ALLOW_PRIVATE_KEY, '') === '1',
             'ai_limits'      => (new AiQuota($this->container))->values(),
+            'routing'          => (new ModelRouting($this->container))->assignments(),
+            'routing_features' => $this->featuresByPlugin($registry->features()),
+            'routing_resolved' => array_map(fn (array $f) => $registry->resolve($f['id']), $registry->features()),
+            'routing_broken'   => $registry->brokenAssignments(),
         ]));
     }
 
@@ -173,6 +178,61 @@ class AiConnectorSettingsController extends BaseController
 
         $this->flash->success(t('Network security settings saved.'));
         $this->redirectToShow();
+    }
+
+    /**
+     * Save Model routing: plugin and feature assignments, locked features and each profile's
+     * "available to users" flag. Every value is checked first; on any error nothing is saved.
+     */
+    public function saveRouting(): void
+    {
+        if (! $this->userSession->isAdmin()) {
+            throw new AccessForbiddenException();
+        }
+        $this->checkCSRFForm();
+
+        $registry = new ProviderRegistry($this->container);
+        $routing = new ModelRouting($this->container);
+        $values = $this->request->getValues();
+        $profiles = $registry->getProfiles();
+        $ids = array_column($profiles, 'id');
+
+        [$errors] = $routing->validate($values, $registry->features(), $ids);
+        $available = is_array($values['available'] ?? null) ? $values['available'] : [];
+        foreach (array_keys($available) as $id) {
+            if (! in_array((string) $id, $ids, true)) {
+                $errors['available.' . $id] = t('A profile marked available no longer exists.');
+            }
+        }
+
+        if ($errors !== []) {
+            $this->flash->failure(t('Model routing not saved.') . ' ' . implode(' ', $errors));
+            $this->redirectToShow();
+            return;
+        }
+
+        foreach ($profiles as $i => $p) {
+            $profiles[$i]['available'] = isset($available[$p['id']]);
+        }
+        $this->configModel->save([ProviderRegistry::PROFILES_KEY => json_encode(array_values($profiles))]);
+        $routing->saveAssignments($values, $registry->features(), $ids);
+        $this->memoryCache->flush();
+        $this->flash->success(t('Model routing saved.'));
+        $this->redirectToShow();
+    }
+
+    /**
+     * @param array<string, array{id:string,label:string,plugin:string}> $features
+     * @return array<string, list<array{id:string,label:string,plugin:string}>>
+     */
+    private function featuresByPlugin(array $features): array
+    {
+        $out = [];
+        foreach ($features as $f) {
+            $out[$f['plugin']][] = $f;
+        }
+        ksort($out);
+        return $out;
     }
 
     /** Save the AI limits (AiQuota): every field a whole number of 1 or more, or nothing is saved. */
