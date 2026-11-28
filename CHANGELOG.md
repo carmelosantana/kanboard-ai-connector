@@ -2,6 +2,14 @@
 
 All notable changes to AiConnector will be documented here.
 
+## 1.6.1 — 2026-11-28
+
+### Security
+- The provider URL guard refuses a host with a trailing dot (`https://api.example.com./v1`). The request kept the dot and so missed the DNS pin, which let a re-binding name send the request and its API key to an internal address. A base URL saved with a trailing dot now shows the invalid-URL error until it is re-saved without it.
+- SIIT addresses (`::ffff:0:a.b.c.d`) are judged by the IPv4 address they carry. Local-use NAT64 (`64:ff9b:1::/48`) and site-local (`fec0::/10`) addresses are always refused.
+- Provider requests no longer go through an environment proxy (`https_proxy`, `all_proxy`), which would have looked the host up again and bypassed the pin. A caller can no longer override the pin, the redirect limit or the proxy setting.
+- The DNS test seam does nothing outside the test suite.
+
 ## 1.6.0 — 2026-11-27
 
 ### Added
