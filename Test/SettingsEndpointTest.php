@@ -2,6 +2,8 @@
 
 require_once 'tests/units/Base.php';
 
+defined('AICONNECTOR_TESTING') || define('AICONNECTOR_TESTING', true);
+
 use Kanboard\Plugin\AiConnector\Controller\AiConnectorSettingsController;
 use Kanboard\Plugin\AiConnector\Model\ProviderRegistry;
 use Kanboard\Plugin\AiConnector\Model\UrlGuard;

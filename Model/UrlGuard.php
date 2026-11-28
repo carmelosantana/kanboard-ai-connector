@@ -12,8 +12,11 @@ namespace Kanboard\Plugin\AiConnector\Model;
  *    a local Ollama and the like. Link-local, cloud metadata, multicast and
  *    reserved addresses are refused even with the opt-in.
  *  - httpClient() returns a Symfony client pinned to the checked address
- *    (the `resolve` option) with redirects off, so a DNS re-bind or a 30x
- *    cannot move the request somewhere the check did not see.
+ *    (the `resolve` option) with redirects and environment proxies off, so a
+ *    DNS re-bind, a 30x or a proxy's own lookup cannot move the request
+ *    somewhere the check did not see. Callers cannot override those options.
+ *  - A host with a trailing dot is refused: the request would keep the dot
+ *    and miss the pin, which is keyed on the dot-less host.
  *
  * The allow-list and LAN opt-in are independent: both must pass.
  *
@@ -34,6 +37,8 @@ class UrlGuard
     private const BLOCKED_CIDRS = [
         '0.0.0.0/8', '169.254.0.0/16', '100.100.100.200/32', '192.0.0.0/24', '224.0.0.0/4', '240.0.0.0/4',
         '::/128', 'fe80::/10', 'fd00:ec2::254/128', 'ff00::/8', '2001::/32', '::/96',
+        'fec0::/10',       // deprecated site-local
+        '64:ff9b:1::/48',  // local-use NAT64 (RFC 8215): translates into the local network
     ];
 
     /** @var callable(string): string[] | null  Test seam replacing DNS. */
@@ -56,9 +61,16 @@ class UrlGuard
         );
     }
 
-    /** Replace DNS resolution in tests; null restores the real resolver. */
+    /**
+     * Replace DNS resolution in tests; null restores the real resolver. Inert
+     * unless AICONNECTOR_TESTING is defined, which only the tests that use the
+     * seam do: in production nothing can swap out DNS.
+     */
     public static function setResolverForTesting(?callable $resolver): void
     {
+        if (! defined('AICONNECTOR_TESTING')) {
+            return;
+        }
         self::$resolver = $resolver;
     }
 
@@ -73,7 +85,11 @@ class UrlGuard
         if (! ProviderRegistry::isValidBaseUrl($url) || $url === '') {
             throw new UnsafeUrlException(UnsafeUrlException::INVALID_URL);
         }
-        $host = self::normaliseHost((string) parse_url($url, PHP_URL_HOST));
+        $rawHost = (string) parse_url($url, PHP_URL_HOST);
+        if (str_ends_with($rawHost, '.')) {
+            throw new UnsafeUrlException(UnsafeUrlException::INVALID_URL);
+        }
+        $host = self::normaliseHost($rawHost);
         if (self::isNumericShorthand($host)) {
             throw new UnsafeUrlException(UnsafeUrlException::INVALID_URL);
         }
@@ -112,6 +128,8 @@ class UrlGuard
         return \Symfony\Component\HttpClient\HttpClient::create([
             'resolve'       => [$host => $ip],
             'max_redirects' => 0,
+            'proxy'         => null,
+            'no_proxy'      => '*',
         ] + $options);
     }
 
@@ -210,6 +228,7 @@ class UrlGuard
         if (strlen($bin) === 16) {
             $embedded = match (true) {
                 str_starts_with($bin, str_repeat("\0", 10) . "\xff\xff") => substr($bin, 12, 4), // ::ffff:a.b.c.d
+                str_starts_with($bin, str_repeat("\0", 8) . "\xff\xff\0\0") => substr($bin, 12, 4), // ::ffff:0:a.b.c.d SIIT
                 str_starts_with($bin, "\x00\x64\xff\x9b" . str_repeat("\0", 8)) => substr($bin, 12, 4), // 64:ff9b::/96 NAT64
                 str_starts_with($bin, "\x20\x02") => substr($bin, 2, 4), // 2002::/16 6to4
                 default => null,

@@ -21,7 +21,7 @@ class UnsafeUrlException extends \RuntimeException
     {
         $shown = $host !== '' ? '"' . $host . '"' : 'the provider URL';
         parent::__construct(match ($reason) {
-            self::INVALID_URL      => 'The provider URL must be an http:// or https:// address with a host and no credentials.',
+            self::INVALID_URL      => 'The provider URL must be an http:// or https:// address with a host (no trailing dot) and no credentials.',
             self::HOST_NOT_ALLOWED => sprintf('%s is not on the AI Connector host allow-list.', $shown),
             self::UNRESOLVABLE     => sprintf('%s could not be resolved.', $shown),
             self::PRIVATE_NETWORK  => sprintf('%s is on a private network (LAN, loopback). Turn on "Allow providers on private networks" to use it.', $shown),

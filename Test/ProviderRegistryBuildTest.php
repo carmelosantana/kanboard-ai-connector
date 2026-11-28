@@ -2,6 +2,8 @@
 
 require_once 'tests/units/Base.php';
 
+defined('AICONNECTOR_TESTING') || define('AICONNECTOR_TESTING', true);
+
 use CarmeloSantana\PHPAgents\Contract\ProviderInterface;
 use CarmeloSantana\PHPAgents\Provider\AnthropicProvider;
 use CarmeloSantana\PHPAgents\Provider\OpenAICompatibleProvider;

@@ -2,6 +2,8 @@
 
 require_once 'tests/units/Base.php';
 
+defined('AICONNECTOR_TESTING') || define('AICONNECTOR_TESTING', true);
+
 use Kanboard\Plugin\AiConnector\Model\UnsafeUrlException;
 use Kanboard\Plugin\AiConnector\Model\UrlGuard;
 use KanboardTests\units\Base;
@@ -157,7 +159,7 @@ class UrlGuardTest extends Base
         ]);
         $guard = new UrlGuard(['api.openai.com', '*.example.com']);
 
-        $this->assertSame('api.openai.com', $guard->check('https://API.openai.com./v1')['host']);
+        $this->assertSame('api.openai.com', $guard->check('https://API.openai.com/v1')['host']);
         $this->assertSame('gw.example.com', $guard->check('https://gw.example.com/v1')['host']);
         $this->assertSame('a.b.example.com', $guard->check('https://a.b.example.com/v1')['host']);
         $this->assertRefused($guard, 'https://example.com/v1', UnsafeUrlException::HOST_NOT_ALLOWED);
@@ -267,5 +269,74 @@ class UrlGuardTest extends Base
         $this->dns(['evil.example' => ['169.254.169.254']]);
         $this->expectException(UnsafeUrlException::class);
         (new UrlGuard())->httpClient('http://evil.example/');
+    }
+
+    /**
+     * A trailing dot names the same host, but Symfony and curl keep it, so the
+     * `resolve` pin (keyed on the dot-less host) would never match and curl
+     * would resolve the name again: a DNS re-bind past the check (#7549).
+     */
+    public function testTrailingDotHostIsRefused(): void
+    {
+        $this->dns(['rebind.example' => ['93.184.216.34'], 'rebind.example.' => ['93.184.216.34']]);
+        $this->assertRefused(new UrlGuard(), 'http://rebind.example./v1', UnsafeUrlException::INVALID_URL);
+        $this->assertRefused(new UrlGuard(), 'https://REBIND.example../v1', UnsafeUrlException::INVALID_URL);
+    }
+
+    /** IPv6 forms that carry or translate to an internal IPv4 address (#7549). */
+    public static function translatedInternalAddresses(): array
+    {
+        return [
+            'SIIT loopback'        => ['::ffff:0:7f00:1', UnsafeUrlException::PRIVATE_NETWORK],
+            'SIIT metadata'        => ['::ffff:0:a9fe:a9fe', UnsafeUrlException::BLOCKED_ADDRESS],
+            'SIIT RFC 1918'        => ['::ffff:0:a00:1', UnsafeUrlException::PRIVATE_NETWORK],
+            'local NAT64 metadata' => ['64:ff9b:1::a9fe:a9fe', UnsafeUrlException::BLOCKED_ADDRESS],
+            'local NAT64 public'   => ['64:ff9b:1:2:3::5db8:d822', UnsafeUrlException::BLOCKED_ADDRESS],
+            'site-local'           => ['fec0::1', UnsafeUrlException::BLOCKED_ADDRESS],
+        ];
+    }
+
+    /** @dataProvider translatedInternalAddresses */
+    #[DataProvider('translatedInternalAddresses')]
+    public function testTranslatedAndSiteLocalAddressesAreNotPublic(string $ip, string $reason): void
+    {
+        $this->dns(['sneaky.example' => [$ip]]);
+        $this->assertRefused(new UrlGuard(), 'http://sneaky.example/', $reason);
+    }
+
+    public function testSiitAddressOfAPublicHostStaysPublic(): void
+    {
+        $this->dns(['ok.example' => ['::ffff:0:5db8:d822']]); // 93.184.216.34
+        $this->assertSame('ok.example', (new UrlGuard())->check('http://ok.example/')['host']);
+    }
+
+    /**
+     * An environment proxy (https_proxy, all_proxy) would resolve the host
+     * itself and void the pin, so the client never uses one (#7549).
+     */
+    public function testHttpClientIgnoresEnvironmentProxies(): void
+    {
+        $this->dns(['api.example.com' => ['93.184.216.34']]);
+        require_once dirname(__DIR__) . '/vendor/autoload.php';
+
+        $client = (new UrlGuard())->httpClient('https://api.example.com/v1', ['no_proxy' => '', 'resolve' => ['api.example.com' => '10.0.0.1'], 'max_redirects' => 5]);
+        $opts = (new \ReflectionProperty($client, 'defaultOptions'))->getValue($client);
+
+        $this->assertSame('*', $opts['no_proxy']);
+        $this->assertNull($opts['proxy'] ?? null);
+        $this->assertSame(['api.example.com' => '93.184.216.34'], $opts['resolve'], 'callers cannot override the pin');
+        $this->assertSame(0, $opts['max_redirects'], 'callers cannot turn redirects back on');
+    }
+
+    /** Outside the tests nothing can swap out DNS: the seam is inert without AICONNECTOR_TESTING (#7549). */
+    public function testResolverSeamIsInertInProduction(): void
+    {
+        $file = var_export(dirname(__DIR__) . '/Model/UrlGuard.php', true);
+        $code = 'namespace Kanboard\Plugin\AiConnector\Model; class ProviderRegistry {} class UnsafeUrlException extends \Exception {}'
+            . ' require ' . $file . ';'
+            . ' UrlGuard::setResolverForTesting(fn ($h) => ["8.8.8.8"]);'
+            . ' echo (new \ReflectionProperty(UrlGuard::class, "resolver"))->getValue() === null ? "inert" : "live";';
+        $out = shell_exec(escapeshellarg(PHP_BINARY) . ' -n -r ' . escapeshellarg($code) . ' 2>&1');
+        $this->assertSame('inert', trim((string) $out));
     }
 }

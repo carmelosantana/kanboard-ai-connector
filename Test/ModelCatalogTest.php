@@ -2,6 +2,8 @@
 
 require_once 'tests/units/Base.php';
 
+defined('AICONNECTOR_TESTING') || define('AICONNECTOR_TESTING', true);
+
 use Kanboard\Plugin\AiConnector\Model\ModelCatalog;
 use Kanboard\Plugin\AiConnector\Model\ModelContextTable;
 use Kanboard\Plugin\AiConnector\Model\ProviderRegistry;
